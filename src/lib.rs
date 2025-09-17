@@ -3,6 +3,7 @@
 
 #![allow(non_snake_case)]
 
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -59,7 +60,7 @@ pub struct JLC {
     pub eda: EDA,
 
     /// 处理之后的文件路径
-    pub process_path: Vec<PathBuf>,
+    pub process_path: HashSet<PathBuf>,
 
     /// 是否忽略哈希孔径添加
     pub ignore_hash: bool,
@@ -77,7 +78,7 @@ impl JlcTrait for JLC {
             path,
             output_path,
             eda,
-            process_path: vec![],
+            process_path: HashSet::new(),
             ignore_hash: false,
             is_imported_pcb_doc: false,
             temp_dir: None,
@@ -94,7 +95,7 @@ impl JlcTrait for JLC {
         let working_dir = self.get_working_dir();
         std::fs::create_dir_all(&working_dir)?;
         std::fs::write(working_dir.join(NAME), content.data.as_ref())?;
-        self.process_path.push(working_dir.join(NAME));
+        self.process_path.insert(working_dir.join(NAME));
         Ok(())
     }
 
@@ -197,6 +198,7 @@ impl JlcTrait for JLC {
                                 if let Some(parent) = file_path.parent() {
                                     std::fs::create_dir_all(parent)?;
                                 }
+                                self.process_path.insert(file_path.clone());
                                 std::fs::copy(file.clone(), file_path.clone())?;
                             }
 
@@ -235,7 +237,7 @@ impl JlcTrait for JLC {
                                 std::fs::write(&file_path, temp)?;
 
                                 // 将处理之后的文件路径保存到process_path
-                                self.process_path.push(file_path.clone());
+                                // self.process_path.insert(file_path.clone());
                             }
                         }
                     }
