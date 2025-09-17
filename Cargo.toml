@@ -11,16 +11,20 @@ description = "TransJLC is a tool for converting Gerber files from other EDAs to
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = "1.0"
 chrono = "0.4.38"
-clap = { version = "4.5.16" }
+clap = { version = "4.5.16", features = ["derive"] }
+indicatif = "0.17"
 lazy_static = "1.5.0"
 locale_config = "0.3.0"
+md-5 = "0.10.5"
+rand = "0.8.5"
 regex = "1.10.4"
 rust-embed = { version = "8.4.0", features = ["debug-embed"] }
 rust-i18n = "3.1.1"
+tempfile = "3.8.1"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 whoami = "1.5.1"
 zip = "2.1.6"
-colored = "2.1.0"
-md-5 = "0.10.5"
-rand = "0.8.5"
-tempfile = "3.8.1"

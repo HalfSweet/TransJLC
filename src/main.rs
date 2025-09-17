@@ -1,68 +1,46 @@
-// SPDX-FileCopyrightText: 2025 HalfSweet
-// SPDX-License-Identifier: Apache-2.0
+//! TransJLC - Convert Gerber files to JLCEDA format
+//! 
+//! A modern Rust application for converting PCB Gerber files from various
+//! EDA software (KiCad, Protel, etc.) to JLCEDA format.
 
 #![allow(non_snake_case)]
-use rust_i18n::t;
-use whoami::Language;
 
-use TransJLC::{JLC, JlcTrait};
+use TransJLC::{config::Config, converter::Converter, error::Result};
+use rust_i18n::t;
+use tracing::{error, info};
 
 rust_i18n::i18n!("i18n");
 
-mod Cli;
+fn main() -> Result<()> {
+    // Parse configuration and initialize logging
+    let config = Config::from_args()
+        .unwrap_or_else(|e| {
+            eprintln!("Configuration error: {}", e);
+            std::process::exit(1);
+        });
 
-fn set_language(language: &str) -> Result<(), Box<dyn std::error::Error>> {
-    if language == "auto" {
-        return Ok(());
+    // Language settings are already applied in from_args()
+    info!("{}", t!("converter.starting"));
+    if config.verbose {
+        info!("Configuration: {:?}", config);
     }
-    let i18n_list = rust_i18n::available_locales!();
-    // 不支持的语言默认使用英语
-    if !i18n_list.contains(&language) {
-        println!("{}", "Language not supported");
-        rust_i18n::set_locale("en");
-    } else {
-        rust_i18n::set_locale(&language);
+
+    // Create and run converter
+    let mut converter = Converter::new(config);
+    
+    match converter.run() {
+        Ok(()) => {
+            let stats = converter.get_conversion_stats();
+            info!("{}", t!("converter.conversion_complete", time = 0));
+            info!("{}", t!("converter.files_processed", count = stats.total_files_processed));
+            
+            println!("{}", t!("converter.conversion_complete", time = 0));
+            Ok(())
+        }
+        Err(e) => {
+            error!("Conversion failed: {:#}", e);
+            eprintln!("Error: {:#}", e);
+            std::process::exit(1);
+        }
     }
-    Ok(())
-}
-
-fn default_language() -> Result<(), Box<dyn std::error::Error>> {
-    let language: Vec<_> = whoami::langs()?
-        .map(|lang: Language| lang.to_string())
-        .collect();
-    let language = language[0].as_str().to_owned();
-    set_language(&language)?;
-
-    Ok(())
-}
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    default_language()?;
-
-    let matches = Cli::cli_command().get_matches();
-    let trans_jlc = Cli::TransJLC::new(&matches);
-    set_language(trans_jlc.language.as_str())?;
-
-    let path = trans_jlc.path.clone();
-    let output = trans_jlc.output_path.clone();
-    let eda = match trans_jlc.EDA.to_lowercase().as_str() {
-        "auto" => TransJLC::EDA::Auto,
-        "protel" => TransJLC::EDA::Protel,
-        "kicad" => TransJLC::EDA::Kicad,
-        _ => TransJLC::EDA::Custom(trans_jlc.EDA.clone()),
-    };
-
-    let mut jlc = JLC::new(path, output, eda);
-    
-    // 检查是否为ZIP文件，如果是则解压
-    jlc.extract_zip_if_needed()?;
-    
-    jlc.copy_file()?;
-
-    // 使用新的finalize_output方法处理最终输出
-    jlc.finalize_output(trans_jlc.zip, trans_jlc.zip_name.as_str())?;
-    
-    println!("{}", t!("success_log"));
-
-    Ok(())
 }
