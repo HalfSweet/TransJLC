@@ -89,8 +89,54 @@ impl EdaPatterns {
     }
 
     /// Match a filename against all patterns and return the layer type
+    /// Special handling for drill files to ensure NPTH takes precedence over PTH
     pub fn match_filename(&self, filename: &str) -> Option<LayerType> {
+        // Special handling for drill files: check NPTH first, then PTH
+        if filename.to_lowercase().ends_with(".drl") {
+            // Check NPTH patterns first
+            if let Some(npth_patterns) = self.patterns.get(&LayerType::NpthThrough) {
+                for pattern in npth_patterns {
+                    if let Ok(regex) = Regex::new(pattern) {
+                        if regex.is_match(filename) {
+                            debug!("Matched '{}' to NPTH using pattern '{}'", filename, pattern);
+                            return Some(LayerType::NpthThrough);
+                        }
+                    }
+                }
+            }
+            
+            // Then check PTH patterns
+            if let Some(pth_patterns) = self.patterns.get(&LayerType::PthThrough) {
+                for pattern in pth_patterns {
+                    if let Ok(regex) = Regex::new(pattern) {
+                        if regex.is_match(filename) {
+                            debug!("Matched '{}' to PTH using pattern '{}'", filename, pattern);
+                            return Some(LayerType::PthThrough);
+                        }
+                    }
+                }
+            }
+            
+            // Check PTH via patterns
+            if let Some(pth_via_patterns) = self.patterns.get(&LayerType::PthThroughVia) {
+                for pattern in pth_via_patterns {
+                    if let Ok(regex) = Regex::new(pattern) {
+                        if regex.is_match(filename) {
+                            debug!("Matched '{}' to PTH Via using pattern '{}'", filename, pattern);
+                            return Some(LayerType::PthThroughVia);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // For non-drill files, use regular pattern matching
         for (layer_type, patterns) in &self.patterns {
+            // Skip drill file types as they're handled above
+            if matches!(layer_type, LayerType::NpthThrough | LayerType::PthThrough | LayerType::PthThroughVia) {
+                continue;
+            }
+            
             for pattern in patterns {
                 if let Ok(regex) = Regex::new(pattern) {
                     if regex.is_match(filename) {
@@ -169,9 +215,17 @@ impl PatternMatcher {
     pub fn create_kicad_patterns() -> EdaPatterns {
         let mut patterns = EdaPatterns::new("KiCad".to_string());
         
-        // Drill files
-        patterns.add_pattern(LayerType::NpthThrough, r"-NPTH\.drl$".to_string());
-        patterns.add_pattern(LayerType::PthThrough, r"-PTH\.drl$".to_string());
+        // Drill files - Order matters! More specific patterns first
+        // NPTH files (Non-Plated Through Holes)
+        patterns.add_pattern(LayerType::NpthThrough, r"(?i)-?NPTH\.drl$".to_string());
+        patterns.add_pattern(LayerType::NpthThrough, r"(?i)NPTH\.drl$".to_string());
+        
+        // PTH files (Plated Through Holes) 
+        patterns.add_pattern(LayerType::PthThrough, r"(?i)-?PTH\.drl$".to_string());
+        patterns.add_pattern(LayerType::PthThrough, r"(?i)PTH\.drl$".to_string());
+        
+        // Generic drill files (fallback - only if not NPTH or PTH)
+        patterns.add_pattern(LayerType::PthThrough, r"(?i)\.drl$".to_string());
         
         // Copper layers
         patterns.add_pattern(LayerType::TopCopper, r"-F_Cu\.gbr$".to_string());
