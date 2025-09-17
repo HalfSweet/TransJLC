@@ -141,12 +141,23 @@ impl EdaPatterns {
 
     /// Check if this pattern set can handle the given files
     pub fn can_handle_files(&self, filenames: &[String]) -> bool {
-        // Check if we can find the board outline (essential layer)
-        let has_board_outline = filenames.iter().any(|filename| {
-            self.match_filename(filename) == Some(LayerType::BoardOutline)
-        });
-
-        has_board_outline
+        let mut matched_types = std::collections::HashSet::new();
+        
+        // Count how many different layer types we can match
+        for filename in filenames {
+            if let Some(layer_type) = self.match_filename(filename) {
+                matched_types.insert(std::mem::discriminant(&layer_type));
+            }
+        }
+        
+        // We need at least 3 different layer types to consider it a viable match
+        // This is more flexible than requiring a specific layer
+        let min_layer_types = 3;
+        
+        debug!("Pattern '{}' matched {} different layer types from {} files", 
+               self.name, matched_types.len(), filenames.len());
+               
+        matched_types.len() >= min_layer_types
     }
 }
 
@@ -201,14 +212,24 @@ impl PatternMatcher {
         patterns.add_pattern(LayerType::BottomSilkscreen, r"(?i)\.gbo$".to_string());
         
         patterns.add_pattern(LayerType::BoardOutline, r"(?i)\.gko$".to_string());
+        patterns.add_pattern(LayerType::BoardOutline, r"(?i)\.gm1$".to_string()); // Alternative outline format
+        patterns.add_pattern(LayerType::BoardOutline, r"(?i)\.outline$".to_string());
+        patterns.add_pattern(LayerType::BoardOutline, r"(?i)\.oln$".to_string());
         
         // Inner layers (G1, G2, etc.)
         patterns.add_pattern(LayerType::InnerLayer(0), r"(?i)\.g(\d+)$".to_string());
+        patterns.add_pattern(LayerType::InnerLayer(0), r"(?i)\.l(\d+)$".to_string()); // Alternative inner layer format
         
-        // Drill files
+        // Drill files - more patterns
         patterns.add_pattern(LayerType::PthThrough, r"(?i)\.drl$".to_string());
-        patterns.add_pattern(LayerType::Other, r"(?i)\.txt$".to_string());
-        patterns.add_pattern(LayerType::Other, r"(?i)\.drr$".to_string());
+        patterns.add_pattern(LayerType::PthThrough, r"(?i)\.txt$".to_string()); // Drill file as txt
+        patterns.add_pattern(LayerType::NpthThrough, r"(?i)npth\.drl$".to_string());
+        patterns.add_pattern(LayerType::NpthThrough, r"(?i)-npth\.drl$".to_string());
+        
+        // Other common files
+        patterns.add_pattern(LayerType::Other, r"(?i)\.drr$".to_string()); // Drill report
+        patterns.add_pattern(LayerType::Other, r"(?i)\.rep$".to_string()); // Report files
+        patterns.add_pattern(LayerType::Other, r"(?i)\.rpt$".to_string());
         
         patterns
     }
@@ -250,22 +271,42 @@ impl PatternMatcher {
             })
             .collect();
 
-        info!("Auto-detecting EDA type from {} files", filenames.len());
+        info!("{}", t!("patterns.detecting_type", count = filenames.len()));
         debug!("Files to analyze: {:?}", filenames);
+
+        // Log individual filenames for debugging
+        for (i, filename) in filenames.iter().enumerate() {
+            debug!("File {}: {}", i + 1, filename);
+        }
 
         let patterns_to_test = vec![
             Self::create_kicad_patterns(),
-            Self::create_protel_patterns(),
+            Self::create_protel_patterns(), 
             Self::create_jlc_patterns(),
         ];
 
         for pattern in patterns_to_test {
+            info!("Testing pattern matcher: {}", pattern.name);
+            
+            // Check individual file matches for debugging
+            let mut matches = 0;
+            for filename in &filenames {
+                if let Some(layer_type) = pattern.match_filename(filename) {
+                    debug!("Pattern '{}' matched '{}' -> {:?}", pattern.name, filename, layer_type);
+                    matches += 1;
+                }
+            }
+            debug!("Pattern '{}' matched {} files", pattern.name, matches);
+            
             if pattern.can_handle_files(&filenames) {
-                info!("Detected EDA type: {}", pattern.name);
+                info!("{}", t!("patterns.detected_pattern", pattern = &pattern.name));
                 return Ok(pattern);
+            } else {
+                debug!("Pattern '{}' cannot handle files (missing board outline)", pattern.name);
             }
         }
 
+        warn!("{}", t!("patterns.no_pattern_found"));
         Err(TransJlcError::NoMatchingPattern.into())
     }
 
@@ -346,17 +387,19 @@ mod tests {
     fn test_can_handle_files() {
         let patterns = PatternMatcher::create_kicad_patterns();
         
-        let files_with_outline = vec![
+        let files_with_multiple_layers = vec![
             "project-F_Cu.gbr".to_string(),
+            "project-B_Cu.gbr".to_string(),
+            "project-F_Mask.gbr".to_string(),
             "project-Edge_Cuts.gbr".to_string(),
         ];
         
-        let files_without_outline = vec![
+        let files_with_few_layers = vec![
             "project-F_Cu.gbr".to_string(),
-            "project-B_Cu.gbr".to_string(),
+            "unknown.txt".to_string(),
         ];
         
-        assert!(patterns.can_handle_files(&files_with_outline));
-        assert!(!patterns.can_handle_files(&files_without_outline));
+        assert!(patterns.can_handle_files(&files_with_multiple_layers));
+        assert!(!patterns.can_handle_files(&files_with_few_layers));
     }
 }
