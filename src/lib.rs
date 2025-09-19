@@ -1,5 +1,5 @@
 //! TransJLC - Convert Gerber files to JLCEDA format
-//! 
+//!
 //! This library provides functionality to convert PCB Gerber files from various
 //! EDA software formats to JLCEDA format with modern Rust practices.
 
@@ -16,7 +16,7 @@ pub mod progress;
 
 // Re-export main types for convenience
 pub use config::{Config, EdaType};
-pub use converter::{Converter, ConversionStats};
+pub use converter::{ConversionStats, Converter};
 pub use error::{Result, ResultExt, TransJlcError};
 
 // Initialize i18n for the library

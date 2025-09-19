@@ -1,5 +1,5 @@
 //! Progress tracking and display using indicatif
-//! 
+//!
 //! This module provides unified progress bar functionality
 //! for various operations throughout the application.
 
@@ -48,7 +48,7 @@ impl ProgressTracker {
         pb.set_style(
             ProgressStyle::default_spinner()
                 .template("{spinner:.green} {msg}")
-                .unwrap_or_else(|_| ProgressStyle::default_spinner())
+                .unwrap_or_else(|_| ProgressStyle::default_spinner()),
         );
         pb.set_message(message.to_string());
         pb.enable_steady_tick(Duration::from_millis(80));
@@ -63,7 +63,11 @@ impl ProgressTracker {
     }
 
     /// Create a progress bar for archive operations
-    pub fn create_archive_progress(&self, total: usize, is_extraction: bool) -> Option<ProgressBar> {
+    pub fn create_archive_progress(
+        &self,
+        total: usize,
+        is_extraction: bool,
+    ) -> Option<ProgressBar> {
         let operation = if is_extraction {
             "Extracting archive"
         } else {
@@ -182,7 +186,7 @@ mod tests {
     fn test_progress_bar_creation_when_disabled() {
         let tracker = ProgressTracker::new(false);
         let pb = tracker.create_file_progress(10, "test operation");
-        
+
         assert!(pb.is_none());
     }
 
@@ -190,21 +194,21 @@ mod tests {
     fn test_progress_bar_creation_when_enabled() {
         let tracker = ProgressTracker::new(true);
         let pb = tracker.create_file_progress(10, "test operation");
-        
+
         assert!(pb.is_some());
     }
 
     #[test]
     fn test_progress_aware_operation() {
         let mut op = ProgressAwareOperation::new("test", 3);
-        
+
         assert_eq!(op.progress_fraction(), 0.0);
         assert!(!op.is_complete());
-        
+
         op.increment();
         assert_eq!(op.current, 1);
         assert!((op.progress_fraction() - 0.333).abs() < 0.01);
-        
+
         op.increment();
         op.increment();
         assert!(op.is_complete());
@@ -215,7 +219,7 @@ mod tests {
     fn test_zero_total_progress() {
         let tracker = ProgressTracker::new(true);
         let pb = tracker.create_file_progress(0, "empty operation");
-        
+
         assert!(pb.is_none());
     }
 

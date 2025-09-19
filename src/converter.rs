@@ -1,5 +1,5 @@
 //! Core conversion engine for TransJLC
-//! 
+//!
 //! This module orchestrates the conversion process from various EDA formats
 //! to JLC format, handling file discovery, pattern matching, and processing.
 
@@ -38,7 +38,7 @@ impl Converter {
     /// Create a new converter with the given configuration
     pub fn new(config: Config) -> Self {
         let progress_enabled = !config.no_progress;
-        
+
         Self {
             config,
             progress_tracker: ProgressTracker::new(progress_enabled),
@@ -52,21 +52,25 @@ impl Converter {
     pub fn run(&mut self) -> Result<()> {
         let start = std::time::Instant::now();
         info!("{}", t!("converter.starting"));
-        
+
         // Validate configuration
-        self.config.validate()
+        self.config
+            .validate()
             .context("Configuration validation failed")?;
 
         // Extract archive if needed
-        let working_path = self.extract_input_files()
+        let working_path = self
+            .extract_input_files()
             .context("Failed to extract input files")?;
 
         // Discover and analyze files
-        let files = self.discover_files(&working_path)
+        let files = self
+            .discover_files(&working_path)
             .context("Failed to discover input files")?;
 
         // Detect EDA format and create pattern matcher
-        let patterns = self.create_pattern_matcher(&files)
+        let patterns = self
+            .create_pattern_matcher(&files)
             .context("Failed to create pattern matcher")?;
 
         // Process files
@@ -78,18 +82,24 @@ impl Converter {
             .context("Failed to add required assets")?;
 
         // Create final output
-        self.create_output()
-            .context("Failed to create output")?;
+        self.create_output().context("Failed to create output")?;
 
-        info!("{}", t!("converter.conversion_complete", time = start.elapsed().as_millis()));
+        info!(
+            "{}",
+            t!(
+                "converter.conversion_complete",
+                time = start.elapsed().as_millis()
+            )
+        );
         Ok(())
     }
 
     /// Extract input files from archive if necessary
     fn extract_input_files(&mut self) -> Result<PathBuf> {
         let progress = self.progress_tracker.create_spinner("Analyzing input...");
-        
-        let working_path = self.archive_extractor
+
+        let working_path = self
+            .archive_extractor
             .extract_if_needed(&self.config.path, !self.config.no_progress)
             .with_path_context("analyze input", &self.config.path)?;
 
@@ -99,8 +109,14 @@ impl Converter {
 
     /// Discover all files in the working directory
     fn discover_files(&self, working_path: &Path) -> Result<Vec<PathBuf>> {
-        info!("{}", t!("converter.processing_file", file = working_path.display().to_string()));
-        
+        info!(
+            "{}",
+            t!(
+                "converter.processing_file",
+                file = working_path.display().to_string()
+            )
+        );
+
         let files = fs::read_dir(working_path)
             .with_path_context("read directory", working_path)?
             .filter_map(|entry| {
@@ -121,7 +137,8 @@ impl Converter {
         if files.is_empty() {
             return Err(TransJlcError::FileNotFound {
                 path: working_path.display().to_string(),
-            }.into());
+            }
+            .into());
         }
 
         Ok(files)
@@ -166,19 +183,27 @@ impl Converter {
     ) -> Result<()> {
         info!("{}", t!("gerber.processing"));
 
-        let progress = self.progress_tracker.create_conversion_progress(files.len());
+        let progress = self
+            .progress_tracker
+            .create_conversion_progress(files.len());
         let is_kicad = patterns.name.to_lowercase().contains("kicad");
 
         for file in files {
             self.process_single_file(file, patterns, working_path, is_kicad)
                 .with_path_context("process file", file)?;
-            
+
             ProgressTracker::update_progress(&progress, 1, None);
         }
 
         ProgressTracker::finish_progress(progress, "File processing completed");
-        
-        info!("{}", t!("converter.files_processed", count = self.processed_files.len()));
+
+        info!(
+            "{}",
+            t!(
+                "converter.files_processed",
+                count = self.processed_files.len()
+            )
+        );
         Ok(())
     }
 
@@ -200,18 +225,19 @@ impl Converter {
         // Try to match the file to a layer type
         if let Some(layer_type) = patterns.match_filename(filename) {
             info!("Matched {} to layer type: {:?}", filename, layer_type);
-            
+
             // Determine output filename and path
             let output_filename = layer_type.to_jlc_filename();
             let output_path = self.get_output_file_path(&output_filename);
 
             // Read and process file content
-            let content = fs::read_to_string(file_path)
-                .with_path_context("read file content", file_path)?;
+            let content =
+                fs::read_to_string(file_path).with_path_context("read file content", file_path)?;
 
             // Apply processing if it's a Gerber file (not drill files)
             let processed_content = if self.should_process_gerber(&layer_type) {
-                self.gerber_processor.process_gerber_content(content, is_kicad)?
+                self.gerber_processor
+                    .process_gerber_content(content, is_kicad)?
             } else {
                 content
             };
@@ -255,12 +281,10 @@ impl Converter {
     /// Write content to output file, creating directories as needed
     fn write_output_file(&self, output_path: &Path, content: &str) -> Result<()> {
         if let Some(parent) = output_path.parent() {
-            fs::create_dir_all(parent)
-                .with_path_context("create output directory", parent)?;
+            fs::create_dir_all(parent).with_path_context("create output directory", parent)?;
         }
 
-        fs::write(output_path, content)
-            .with_path_context("write file", output_path)?;
+        fs::write(output_path, content).with_path_context("write file", output_path)?;
 
         debug!("Written output file: {}", output_path.display());
         Ok(())
@@ -271,18 +295,18 @@ impl Converter {
         info!("Adding required assets");
 
         const ASSET_NAME: &str = "PCB下单必读.txt";
-        
-        let content = Asset::get(ASSET_NAME)
-            .context("Required asset not found in embedded files")?;
+
+        let content =
+            Asset::get(ASSET_NAME).context("Required asset not found in embedded files")?;
 
         let output_path = self.get_working_output_dir().join(ASSET_NAME);
-        
+
         fs::write(&output_path, content.data.as_ref())
             .with_path_context("write required asset", &output_path)?;
 
         // Track the asset as an "other" file
         self.processed_files.insert(LayerType::Other, output_path);
-        
+
         info!("Added required asset: {}", ASSET_NAME);
         Ok(())
     }
@@ -295,14 +319,13 @@ impl Converter {
 
         if self.config.zip {
             // Create ZIP archive
-            let zip_path = self.config.output_path.join(format!("{}.zip", self.config.zip_name));
-            
-            ArchiveCreator::create_zip(
-                &file_paths,
-                &zip_path,
-                !self.config.no_progress,
-            )?;
-            
+            let zip_path = self
+                .config
+                .output_path
+                .join(format!("{}.zip", self.config.zip_name));
+
+            ArchiveCreator::create_zip(&file_paths, &zip_path, !self.config.no_progress)?;
+
             info!("Created ZIP archive: {}", zip_path.display());
         } else {
             // Copy files to final output directory
@@ -315,10 +338,9 @@ impl Converter {
 
     /// Copy processed files to the final output directory
     fn copy_files_to_output(&self, file_paths: &[PathBuf]) -> Result<()> {
-        let progress = self.progress_tracker.create_file_progress(
-            file_paths.len(),
-            "Copying files to output"
-        );
+        let progress = self
+            .progress_tracker
+            .create_file_progress(file_paths.len(), "Copying files to output");
 
         // Ensure output directory exists
         fs::create_dir_all(&self.config.output_path)
@@ -327,10 +349,10 @@ impl Converter {
         for file_path in file_paths {
             if let Some(filename) = file_path.file_name() {
                 let dest_path = self.config.output_path.join(filename);
-                
+
                 fs::copy(file_path, &dest_path)
                     .with_path_context("copy file to output", &dest_path)?;
-                
+
                 ProgressTracker::update_progress(&progress, 1, None);
             }
         }
@@ -393,7 +415,7 @@ mod tests {
 
         let converter = Converter::new(config);
         let working_dir = converter.get_working_output_dir();
-        
+
         // Should use config output path when no temp directory
         assert_eq!(working_dir, PathBuf::from("./output"));
     }
@@ -438,13 +460,17 @@ mod tests {
         };
 
         let mut converter = Converter::new(config);
-        
+
         // Add some mock processed files
-        converter.processed_files.insert(LayerType::TopCopper, PathBuf::from("top.gtl"));
-        converter.processed_files.insert(LayerType::BottomCopper, PathBuf::from("bottom.gbl"));
+        converter
+            .processed_files
+            .insert(LayerType::TopCopper, PathBuf::from("top.gtl"));
+        converter
+            .processed_files
+            .insert(LayerType::BottomCopper, PathBuf::from("bottom.gbl"));
 
         let stats = converter.get_conversion_stats();
-        
+
         assert_eq!(stats.total_files_processed, 2);
         assert_eq!(stats.output_format, "ZIP");
         assert!(stats.layer_types_found.contains(&LayerType::TopCopper));

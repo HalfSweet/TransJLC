@@ -1,11 +1,11 @@
 //! Configuration management for TransJLC
-//! 
+//!
 //! This module handles CLI argument parsing, language configuration,
 //! and application settings with full i18n support.
 
 use anyhow::{anyhow, Context, Result};
-use clap::{Arg, ColorChoice, Command, value_parser};
 use clap::builder::styling;
+use clap::{value_parser, Arg, ColorChoice, Command};
 use rust_i18n::t;
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -30,7 +30,7 @@ pub fn build_cli() -> Command {
                 .long("language")
                 .help(t!("cli.language_help").to_string())
                 .value_parser(["auto", "en", "zh-CN", "ja"])
-                .default_value("auto")
+                .default_value("auto"),
         )
         .arg(
             Arg::new("eda")
@@ -38,7 +38,7 @@ pub fn build_cli() -> Command {
                 .long("eda")
                 .help("EDA software type (auto, kicad, jlc, protel)")
                 .value_parser(["auto", "kicad", "jlc", "protel"])
-                .default_value("auto")
+                .default_value("auto"),
         )
         .arg(
             Arg::new("path")
@@ -46,7 +46,7 @@ pub fn build_cli() -> Command {
                 .long("path")
                 .help(t!("cli.input_help").to_string())
                 .value_parser(value_parser!(String))
-                .default_value(".")
+                .default_value("."),
         )
         .arg(
             Arg::new("output_path")
@@ -54,14 +54,14 @@ pub fn build_cli() -> Command {
                 .long("output_path")
                 .help(t!("cli.output_help").to_string())
                 .value_parser(value_parser!(String))
-                .default_value("./output")
+                .default_value("./output"),
         )
         .arg(
             Arg::new("zip")
                 .short('z')
                 .long("zip")
                 .help(t!("root_zip_help").to_string())
-                .action(clap::ArgAction::SetTrue)
+                .action(clap::ArgAction::SetTrue),
         )
         .arg(
             Arg::new("zip_name")
@@ -69,20 +69,20 @@ pub fn build_cli() -> Command {
                 .long("zip_name")
                 .help(t!("root_zip_name_help").to_string())
                 .value_parser(value_parser!(String))
-                .default_value("Gerber")
+                .default_value("Gerber"),
         )
         .arg(
             Arg::new("verbose")
                 .short('v')
                 .long("verbose")
                 .help(t!("root_verbose_help").to_string())
-                .action(clap::ArgAction::SetTrue)
+                .action(clap::ArgAction::SetTrue),
         )
         .arg(
             Arg::new("no_progress")
                 .long("no-progress")
                 .help(t!("root_no_progress_help").to_string())
-                .action(clap::ArgAction::SetTrue)
+                .action(clap::ArgAction::SetTrue),
         )
 }
 
@@ -117,34 +117,39 @@ impl Config {
     /// Parse arguments and apply initial configuration
     pub fn from_args() -> Result<Self> {
         let matches = build_cli().get_matches();
-        
-        let path = matches.get_one::<String>("path")
+
+        let path = matches
+            .get_one::<String>("path")
             .ok_or_else(|| anyhow!("Input path is required"))?
             .to_string();
         let path = PathBuf::from(path);
-        
-        let output_path = matches.get_one::<String>("output_path")
+
+        let output_path = matches
+            .get_one::<String>("output_path")
             .cloned()
             .unwrap_or_else(|| "./output".to_string());
         let output_path = PathBuf::from(output_path);
-        
-        let eda = matches.get_one::<String>("eda")
+
+        let eda = matches
+            .get_one::<String>("eda")
             .cloned()
             .unwrap_or_else(|| "auto".to_string());
-        
-        let language = matches.get_one::<String>("language")
+
+        let language = matches
+            .get_one::<String>("language")
             .cloned()
             .unwrap_or_else(|| "auto".to_string());
-        
+
         let zip = matches.get_flag("zip");
-        
-        let zip_name = matches.get_one::<String>("zip_name")
+
+        let zip_name = matches
+            .get_one::<String>("zip_name")
             .cloned()
             .unwrap_or_else(|| "Gerber".to_string());
-        
+
         let verbose = matches.get_flag("verbose");
         let no_progress = matches.get_flag("no_progress");
-        
+
         let config = Config {
             language,
             eda,
@@ -155,7 +160,7 @@ impl Config {
             verbose,
             no_progress,
         };
-        
+
         // Set up tracing with environment variable support
         // RUST_LOG takes precedence over verbose flag
         let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -168,7 +173,11 @@ impl Config {
 
         info!("{}", t!("config.detecting_language"));
         if config.verbose {
-            info!(?config, "{}", t!("config.using_language", lang = &config.language));
+            info!(
+                ?config,
+                "{}",
+                t!("config.using_language", lang = &config.language)
+            );
         }
 
         Ok(config)
@@ -183,7 +192,7 @@ impl Config {
             self.set_language(&self.language)
                 .context("Failed to set specified language")?;
         }
-        
+
         info!("{}", t!("config.using_language", lang = &self.language));
         Ok(())
     }
@@ -191,14 +200,14 @@ impl Config {
     /// Set language manually
     fn set_language(&self, language: &str) -> Result<()> {
         let available_locales = rust_i18n::available_locales!();
-        
+
         if !available_locales.contains(&language) {
             warn!("{}", t!("config.fallback_language", lang = "en"));
             rust_i18n::set_locale("en");
         } else {
             rust_i18n::set_locale(language);
         }
-        
+
         Ok(())
     }
 
@@ -244,8 +253,12 @@ impl Config {
 
         // Create output directory if it doesn't exist
         if !self.output_path.exists() {
-            std::fs::create_dir_all(&self.output_path)
-                .with_context(|| format!("Failed to create output directory: {}", self.output_path.display()))?;
+            std::fs::create_dir_all(&self.output_path).with_context(|| {
+                format!(
+                    "Failed to create output directory: {}",
+                    self.output_path.display()
+                )
+            })?;
             info!("Created output directory: {}", self.output_path.display());
         }
 
@@ -309,6 +322,9 @@ mod tests {
             no_progress: false,
         };
 
-        assert_eq!(config.get_eda_type(), EdaType::Custom("custom_eda".to_string()));
+        assert_eq!(
+            config.get_eda_type(),
+            EdaType::Custom("custom_eda".to_string())
+        );
     }
 }

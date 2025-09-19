@@ -1,5 +1,5 @@
 //! Archive handling for ZIP file operations
-//! 
+//!
 //! This module provides functionality for extracting input ZIP files
 //! and creating output ZIP files with proper progress tracking.
 
@@ -29,16 +29,25 @@ impl ArchiveExtractor {
     /// Returns the path to use for processing (original path or extracted directory)
     pub fn extract_if_needed(&mut self, input_path: &Path, show_progress: bool) -> Result<PathBuf> {
         if !self.is_zip_file(input_path) {
-            info!("Input is not a ZIP file, using as directory: {}", input_path.display());
+            info!(
+                "Input is not a ZIP file, using as directory: {}",
+                input_path.display()
+            );
             return Ok(input_path.to_path_buf());
         }
 
-            info!("{}", t!("archive.extracting", file = input_path.display().to_string()));
+        info!(
+            "{}",
+            t!(
+                "archive.extracting",
+                file = input_path.display().to_string()
+            )
+        );
 
         // Create temporary directory
-        let temp_dir = TempDir::new()
-            .context("Failed to create temporary directory for ZIP extraction")?;
-        
+        let temp_dir =
+            TempDir::new().context("Failed to create temporary directory for ZIP extraction")?;
+
         let temp_path = temp_dir.path();
 
         // Extract ZIP file
@@ -54,8 +63,9 @@ impl ArchiveExtractor {
 
     /// Check if a file is a ZIP file based on extension
     fn is_zip_file(&self, path: &Path) -> bool {
-        path.is_file() 
-            && path.extension()
+        path.is_file()
+            && path
+                .extension()
                 .and_then(|ext| ext.to_str())
                 .map(|ext| ext.to_lowercase() == "zip")
                 .unwrap_or(false)
@@ -63,17 +73,16 @@ impl ArchiveExtractor {
 
     /// Extract ZIP file to the specified directory
     fn extract_zip_to_directory(
-        &self, 
-        zip_path: &Path, 
-        target_dir: &Path, 
-        show_progress: bool
+        &self,
+        zip_path: &Path,
+        target_dir: &Path,
+        show_progress: bool,
     ) -> Result<()> {
-        let file = fs::File::open(zip_path)
-            .with_path_context("open ZIP file", zip_path)?;
+        let file = fs::File::open(zip_path).with_path_context("open ZIP file", zip_path)?;
 
-        let mut archive = ZipArchive::new(file)
-            .map_err(|e| TransJlcError::ZipExtractionFailed { 
-                reason: format!("Invalid ZIP file: {}", e) 
+        let mut archive =
+            ZipArchive::new(file).map_err(|e| TransJlcError::ZipExtractionFailed {
+                reason: format!("Invalid ZIP file: {}", e),
             })?;
 
         let total_files = archive.len();
@@ -93,16 +102,16 @@ impl ArchiveExtractor {
         };
 
         for i in 0..archive.len() {
-            let mut file = archive.by_index(i)
+            let mut file = archive
+                .by_index(i)
                 .map_err(|e| TransJlcError::ZipExtractionFailed {
-                    reason: format!("Failed to read file at index {}: {}", i, e)
+                    reason: format!("Failed to read file at index {}: {}", i, e),
                 })?;
 
             let outpath = target_dir.join(file.name());
 
             if file.is_dir() {
-                fs::create_dir_all(&outpath)
-                    .with_path_context("create directory", &outpath)?;
+                fs::create_dir_all(&outpath).with_path_context("create directory", &outpath)?;
             } else {
                 // Create parent directories if needed
                 if let Some(parent) = outpath.parent() {
@@ -111,9 +120,9 @@ impl ArchiveExtractor {
                 }
 
                 // Extract file
-                let mut outfile = fs::File::create(&outpath)
-                    .with_path_context("create output file", &outpath)?;
-                
+                let mut outfile =
+                    fs::File::create(&outpath).with_path_context("create output file", &outpath)?;
+
                 io::copy(&mut file, &mut outfile)
                     .with_path_context("write extracted file", &outpath)?;
             }
@@ -155,18 +164,23 @@ impl ArchiveCreator {
         show_progress: bool,
     ) -> Result<()> {
         let output_path = output_path.as_ref();
-        let files: Vec<PathBuf> = files.into_iter().map(|p| p.as_ref().to_path_buf()).collect();
+        let files: Vec<PathBuf> = files
+            .into_iter()
+            .map(|p| p.as_ref().to_path_buf())
+            .collect();
 
-        info!("{}", t!("archive.creating", file = output_path.display().to_string()));
+        info!(
+            "{}",
+            t!("archive.creating", file = output_path.display().to_string())
+        );
 
         // Create output directory if it doesn't exist
         if let Some(parent) = output_path.parent() {
-            fs::create_dir_all(parent)
-                .with_path_context("create output directory", parent)?;
+            fs::create_dir_all(parent).with_path_context("create output directory", parent)?;
         }
 
-        let file = fs::File::create(output_path)
-            .with_path_context("create ZIP file", output_path)?;
+        let file =
+            fs::File::create(output_path).with_path_context("create ZIP file", output_path)?;
 
         let mut zip = zip::ZipWriter::new(file);
         let options = zip::write::SimpleFileOptions::default()
@@ -195,8 +209,8 @@ impl ArchiveCreator {
             zip.start_file(file_name, options)
                 .context("Failed to start ZIP file entry")?;
 
-            let content = fs::read(&file_path)
-                .with_path_context("read file for ZIP", &file_path)?;
+            let content =
+                fs::read(&file_path).with_path_context("read file for ZIP", &file_path)?;
 
             use std::io::Write;
             zip.write_all(&content)
@@ -207,8 +221,7 @@ impl ArchiveCreator {
             }
         }
 
-        zip.finish()
-            .context("Failed to finalize ZIP file")?;
+        zip.finish().context("Failed to finalize ZIP file")?;
 
         if let Some(pb) = progress {
             pb.finish_with_message("ZIP file created successfully");
@@ -226,12 +239,12 @@ mod tests {
     #[test]
     fn test_is_zip_file() {
         let _extractor = ArchiveExtractor::new();
-        
+
         // Test ZIP file detection
         let zip_path = Path::new("test.zip");
         let txt_path = Path::new("test.txt");
         let _dir_path = Path::new("test_dir");
-        
+
         // Note: These tests would need actual files to be fully functional
         // This is testing the logic, not actual file access
         assert!(zip_path.extension().unwrap() == "zip");
@@ -243,7 +256,7 @@ mod tests {
         let _options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored)
             .unix_permissions(0o755);
-        
+
         // Test that options are created successfully
         // The actual compression method can be verified in integration tests
         assert!(true); // Placeholder for actual verification
