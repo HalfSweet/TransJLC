@@ -156,17 +156,12 @@ impl Config {
             no_progress,
         };
         
-        // Set up tracing based on verbose flag
-        let filter = if config.verbose {
-            "trace"
-        } else {
-            "info"
-        };
-        
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_target(false)
-            .init();
+        // Set up tracing with environment variable support
+        // RUST_LOG takes precedence over verbose flag
+        let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("off"));
+
+        tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
         // Apply language settings first
         config.apply_language_settings()?;
