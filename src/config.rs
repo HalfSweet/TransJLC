@@ -3,143 +3,79 @@
 //! This module handles CLI argument parsing and application settings.
 
 use anyhow::{anyhow, Context, Result};
-use clap::builder::styling;
-use clap::{value_parser, Arg, ColorChoice, Command};
+use clap::{ColorChoice, Parser};
 use std::path::PathBuf;
 use tracing::info;
 
-/// Build the CLI command
-pub fn build_cli() -> Command {
-    let styles = styling::Styles::styled()
-        .header(styling::AnsiColor::Green.on_default() | styling::Effects::BOLD)
-        .usage(styling::AnsiColor::Green.on_default() | styling::Effects::BOLD)
-        .literal(styling::AnsiColor::Blue.on_default() | styling::Effects::BOLD)
-        .placeholder(styling::AnsiColor::Cyan.on_default());
-
-    Command::new("transjlc")
-        .about("TransJLC - Convert EDA files for JLCPCB manufacturing")
-        .author("HalfSweet <HalfSweet@HalfSweet.cn>")
-        .color(ColorChoice::Auto)
-        .styles(styles)
-        .arg(
-            Arg::new("eda")
-                .short('e')
-                .long("eda")
-                .help("EDA software type (auto, kicad, jlc, protel)")
-                .value_parser(["auto", "kicad", "jlc", "protel"])
-                .default_value("auto"),
-        )
-        .arg(
-            Arg::new("path")
-                .short('p')
-                .long("path")
-                .help("Input file or directory path")
-                .value_parser(value_parser!(String))
-                .default_value("."),
-        )
-        .arg(
-            Arg::new("output_path")
-                .short('o')
-                .long("output_path")
-                .help("Output file or directory path")
-                .value_parser(value_parser!(String))
-                .default_value("./output"),
-        )
-        .arg(
-            Arg::new("zip")
-                .short('z')
-                .long("zip")
-                .help("Compress converted files into a ZIP archive")
-                .action(clap::ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("zip_name")
-                .short('n')
-                .long("zip_name")
-                .help("Name for the output ZIP archive")
-                .value_parser(value_parser!(String))
-                .default_value("Gerber"),
-        )
-        .arg(
-            Arg::new("verbose")
-                .short('v')
-                .long("verbose")
-                .help("Enable verbose logging output")
-                .action(clap::ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("no_progress")
-                .long("no-progress")
-                .help("Disable progress indicators")
-                .action(clap::ArgAction::SetTrue),
-        )
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Parser)]
+#[command(
+    name = "transjlc",
+    about = "TransJLC - Convert EDA files for JLCPCB manufacturing",
+    author = "HalfSweet <HalfSweet@HalfSweet.cn>",
+    version,
+    color = ColorChoice::Auto
+)]
 pub struct Config {
     /// EDA software type for input files
+    #[arg(
+        short = 'e',
+        long = "eda",
+        default_value = "auto",
+        value_parser = ["auto", "kicad", "jlc", "protel"],
+        help = "EDA software type (auto, kicad, jlc, protel)"
+    )]
     pub eda: String,
 
     /// Input path (file or directory)
+    #[arg(
+        short = 'p',
+        long = "path",
+        default_value = ".",
+        value_name = "PATH",
+        help = "Input file or directory path"
+    )]
     pub path: PathBuf,
 
     /// Output directory path
+    #[arg(
+        short = 'o',
+        long = "output_path",
+        default_value = "./output",
+        value_name = "OUTPUT",
+        help = "Output file or directory path"
+    )]
     pub output_path: PathBuf,
 
     /// Create ZIP file for output
+    #[arg(
+        short = 'z',
+        long = "zip",
+        help = "Compress converted files into a ZIP archive"
+    )]
     pub zip: bool,
 
     /// Name for the output ZIP file
+    #[arg(
+        short = 'n',
+        long = "zip_name",
+        default_value = "Gerber",
+        help = "Name for the output ZIP archive"
+    )]
     pub zip_name: String,
 
     /// Enable verbose logging
+    #[arg(short = 'v', long = "verbose", help = "Enable verbose logging output")]
     pub verbose: bool,
 
     /// Disable progress bars
+    #[arg(long = "no-progress", help = "Disable progress indicators")]
     pub no_progress: bool,
 }
 
 impl Config {
     /// Parse arguments and apply initial configuration
     pub fn from_args() -> Result<Self> {
-        let matches = build_cli().get_matches();
-
-        let path = matches
-            .get_one::<String>("path")
-            .ok_or_else(|| anyhow!("Input path is required"))?
-            .to_string();
-        let path = PathBuf::from(path);
-
-        let output_path = matches
-            .get_one::<String>("output_path")
-            .cloned()
-            .unwrap_or_else(|| "./output".to_string());
-        let output_path = PathBuf::from(output_path);
-
-        let eda = matches
-            .get_one::<String>("eda")
-            .cloned()
-            .unwrap_or_else(|| "auto".to_string());
-
-        let zip = matches.get_flag("zip");
-
-        let zip_name = matches
-            .get_one::<String>("zip_name")
-            .cloned()
-            .unwrap_or_else(|| "Gerber".to_string());
-
-        let verbose = matches.get_flag("verbose");
-        let no_progress = matches.get_flag("no_progress");
-
-        let config = Config {
-            eda,
-            path,
-            output_path,
-            zip,
-            zip_name,
-            verbose,
-            no_progress,
-        };
+        let config = Config::parse();
 
         // Set up tracing with environment variable support
         // RUST_LOG takes precedence over verbose flag
@@ -170,7 +106,7 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         // Validate input path exists
         if !self.path.exists() {
-            return Err(anyhow::anyhow!(
+            return Err(anyhow!(
                 "Input path does not exist: {}",
                 self.path.display()
             ));
