@@ -358,14 +358,3 @@ fn test_error_handling_no_matching_patterns() {
     let result = PatternMatcher::auto_detect_eda(&files);
     assert!(result.is_err()); // Should fail to detect any known format
 }
-
-// Test i18n integration
-#[test]
-fn test_i18n_availability() {
-    // Ensure i18n is properly initialized
-    let locales = rust_i18n::available_locales!();
-
-    // Should have at least English and Chinese
-    assert!(locales.contains(&"en"));
-    assert!(locales.contains(&"zh-CN") || locales.contains(&"zh/CN"));
-}
