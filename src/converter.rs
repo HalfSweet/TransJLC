@@ -13,7 +13,6 @@ use crate::{
 };
 use anyhow::Context;
 use rust_embed::RustEmbed;
-use rust_i18n::t;
 use std::{
     collections::HashMap,
     fs,
@@ -51,7 +50,7 @@ impl Converter {
     /// Run the complete conversion process
     pub fn run(&mut self) -> Result<()> {
         let start = std::time::Instant::now();
-        info!("{}", t!("converter.starting"));
+        info!("Starting conversion process...");
 
         // Validate configuration
         self.config
@@ -84,13 +83,7 @@ impl Converter {
         // Create final output
         self.create_output().context("Failed to create output")?;
 
-        info!(
-            "{}",
-            t!(
-                "converter.conversion_complete",
-                time = start.elapsed().as_millis()
-            )
-        );
+        info!("Conversion completed in {} ms", start.elapsed().as_millis());
         Ok(())
     }
 
@@ -109,13 +102,7 @@ impl Converter {
 
     /// Discover all files in the working directory
     fn discover_files(&self, working_path: &Path) -> Result<Vec<PathBuf>> {
-        info!(
-            "{}",
-            t!(
-                "converter.processing_file",
-                file = working_path.display().to_string()
-            )
-        );
+        info!("Processing files in {}", working_path.display());
 
         let files = fs::read_dir(working_path)
             .with_path_context("read directory", working_path)?
@@ -131,7 +118,7 @@ impl Converter {
             })
             .collect::<Vec<_>>();
 
-        info!("{}", t!("converter.files_processed", count = files.len()));
+        info!("Discovered {} files", files.len());
         debug!("Files found: {:?}", files);
 
         if files.is_empty() {
@@ -146,23 +133,23 @@ impl Converter {
 
     /// Create appropriate pattern matcher based on configuration and file analysis
     fn create_pattern_matcher(&self, files: &[PathBuf]) -> Result<EdaPatterns> {
-        info!("{}", t!("patterns.detecting_type", count = files.len()));
+        info!("Detecting EDA tool type for {} files...", files.len());
 
         let patterns = match self.config.get_eda_type() {
             EdaType::Auto => {
-                info!("{}", t!("patterns.no_pattern_found"));
+                info!("Attempting to auto-detect an EDA format");
                 PatternMatcher::auto_detect_eda(files)?
             }
             EdaType::KiCad => {
-                info!("{}", t!("patterns.detected_pattern", pattern = "KiCad"));
+                info!("Using KiCad naming patterns");
                 PatternMatcher::create_kicad_patterns()
             }
             EdaType::Protel => {
-                info!("{}", t!("patterns.detected_pattern", pattern = "Protel"));
+                info!("Using Protel naming patterns");
                 PatternMatcher::create_protel_patterns()
             }
             EdaType::Jlc => {
-                info!("{}", t!("patterns.detected_pattern", pattern = "JLC"));
+                info!("Using JLC naming patterns");
                 PatternMatcher::create_jlc_patterns()
             }
             EdaType::Custom(name) => {
@@ -181,7 +168,7 @@ impl Converter {
         patterns: &EdaPatterns,
         working_path: &Path,
     ) -> Result<()> {
-        info!("{}", t!("gerber.processing"));
+        info!("Processing Gerber files...");
 
         let progress = self
             .progress_tracker
@@ -197,13 +184,7 @@ impl Converter {
 
         ProgressTracker::finish_progress(progress, "File processing completed");
 
-        info!(
-            "{}",
-            t!(
-                "converter.files_processed",
-                count = self.processed_files.len()
-            )
-        );
+        info!("Processed {} files", self.processed_files.len());
         Ok(())
     }
 
@@ -415,7 +396,6 @@ mod tests {
     #[test]
     fn test_converter_creation() {
         let config = Config {
-            language: "en".to_string(),
             eda: "kicad".to_string(),
             path: PathBuf::from("."),
             output_path: PathBuf::from("./output"),
@@ -432,7 +412,6 @@ mod tests {
     #[test]
     fn test_working_output_dir() {
         let config = Config {
-            language: "en".to_string(),
             eda: "kicad".to_string(),
             path: PathBuf::from("."),
             output_path: PathBuf::from("./output"),
@@ -452,7 +431,6 @@ mod tests {
     #[test]
     fn test_should_process_gerber() {
         let config = Config {
-            language: "en".to_string(),
             eda: "kicad".to_string(),
             path: PathBuf::from("."),
             output_path: PathBuf::from("./output"),
@@ -478,7 +456,6 @@ mod tests {
     #[test]
     fn test_conversion_stats() {
         let config = Config {
-            language: "en".to_string(),
             eda: "kicad".to_string(),
             path: PathBuf::from("."),
             output_path: PathBuf::from("./output"),
@@ -516,7 +493,6 @@ mod tests {
         fs::write(&file_prefixed, "G04*\nG54D11*\n").expect("Failed to write prefixed file");
 
         let config = Config {
-            language: "en".to_string(),
             eda: "kicad".to_string(),
             path: PathBuf::from("."),
             output_path: PathBuf::from("./output"),

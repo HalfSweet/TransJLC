@@ -1,17 +1,14 @@
 //! Configuration management for TransJLC
 //!
-//! This module handles CLI argument parsing, language configuration,
-//! and application settings with full i18n support.
+//! This module handles CLI argument parsing and application settings.
 
 use anyhow::{anyhow, Context, Result};
 use clap::builder::styling;
 use clap::{value_parser, Arg, ColorChoice, Command};
-use rust_i18n::t;
 use std::path::PathBuf;
-use tracing::{info, warn};
-use whoami::Language;
+use tracing::info;
 
-/// Build the CLI command with i18n support
+/// Build the CLI command
 pub fn build_cli() -> Command {
     let styles = styling::Styles::styled()
         .header(styling::AnsiColor::Green.on_default() | styling::Effects::BOLD)
@@ -20,18 +17,10 @@ pub fn build_cli() -> Command {
         .placeholder(styling::AnsiColor::Cyan.on_default());
 
     Command::new("transjlc")
-        .about(t!("cli.about").to_string())
+        .about("TransJLC - Convert EDA files for JLCPCB manufacturing")
         .author("HalfSweet <HalfSweet@HalfSweet.cn>")
         .color(ColorChoice::Auto)
         .styles(styles)
-        .arg(
-            Arg::new("language")
-                .short('l')
-                .long("language")
-                .help(t!("cli.language_help").to_string())
-                .value_parser(["auto", "en", "zh-CN", "ja"])
-                .default_value("auto"),
-        )
         .arg(
             Arg::new("eda")
                 .short('e')
@@ -44,7 +33,7 @@ pub fn build_cli() -> Command {
             Arg::new("path")
                 .short('p')
                 .long("path")
-                .help(t!("cli.input_help").to_string())
+                .help("Input file or directory path")
                 .value_parser(value_parser!(String))
                 .default_value("."),
         )
@@ -52,7 +41,7 @@ pub fn build_cli() -> Command {
             Arg::new("output_path")
                 .short('o')
                 .long("output_path")
-                .help(t!("cli.output_help").to_string())
+                .help("Output file or directory path")
                 .value_parser(value_parser!(String))
                 .default_value("./output"),
         )
@@ -60,14 +49,14 @@ pub fn build_cli() -> Command {
             Arg::new("zip")
                 .short('z')
                 .long("zip")
-                .help(t!("root_zip_help").to_string())
+                .help("Compress converted files into a ZIP archive")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
             Arg::new("zip_name")
                 .short('n')
                 .long("zip_name")
-                .help(t!("root_zip_name_help").to_string())
+                .help("Name for the output ZIP archive")
                 .value_parser(value_parser!(String))
                 .default_value("Gerber"),
         )
@@ -75,22 +64,19 @@ pub fn build_cli() -> Command {
             Arg::new("verbose")
                 .short('v')
                 .long("verbose")
-                .help(t!("root_verbose_help").to_string())
+                .help("Enable verbose logging output")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
             Arg::new("no_progress")
                 .long("no-progress")
-                .help(t!("root_no_progress_help").to_string())
+                .help("Disable progress indicators")
                 .action(clap::ArgAction::SetTrue),
         )
 }
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Language for the application interface
-    pub language: String,
-
     /// EDA software type for input files
     pub eda: String,
 
@@ -135,11 +121,6 @@ impl Config {
             .cloned()
             .unwrap_or_else(|| "auto".to_string());
 
-        let language = matches
-            .get_one::<String>("language")
-            .cloned()
-            .unwrap_or_else(|| "auto".to_string());
-
         let zip = matches.get_flag("zip");
 
         let zip_name = matches
@@ -151,7 +132,6 @@ impl Config {
         let no_progress = matches.get_flag("no_progress");
 
         let config = Config {
-            language,
             eda,
             path,
             output_path,
@@ -168,66 +148,11 @@ impl Config {
 
         tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
-        // Apply language settings first
-        config.apply_language_settings()?;
-
-        info!("{}", t!("config.detecting_language"));
         if config.verbose {
-            info!(
-                ?config,
-                "{}",
-                t!("config.using_language", lang = &config.language)
-            );
+            info!("Configuration: {:?}", config);
         }
 
         Ok(config)
-    }
-
-    /// Initialize and apply language settings
-    pub fn apply_language_settings(&self) -> Result<()> {
-        if self.language == "auto" {
-            self.set_language_from_system()
-                .context("Failed to detect system language")?;
-        } else {
-            self.set_language(&self.language)
-                .context("Failed to set specified language")?;
-        }
-
-        info!("{}", t!("config.using_language", lang = &self.language));
-        Ok(())
-    }
-
-    /// Set language manually
-    fn set_language(&self, language: &str) -> Result<()> {
-        let available_locales = rust_i18n::available_locales!();
-
-        if !available_locales.contains(&language) {
-            warn!("{}", t!("config.fallback_language", lang = "en"));
-            rust_i18n::set_locale("en");
-        } else {
-            rust_i18n::set_locale(language);
-        }
-
-        Ok(())
-    }
-
-    /// Detect and set language from system settings
-    fn set_language_from_system(&self) -> Result<()> {
-        let languages: Vec<String> = whoami::langs()
-            .context("Failed to get system languages")?
-            .map(|lang: Language| lang.to_string())
-            .collect();
-
-        if let Some(primary_language) = languages.first() {
-            self.set_language(primary_language)
-                .with_context(|| format!("Failed to set system language: {}", primary_language))?;
-            info!("{}", t!("config.using_language", lang = primary_language));
-        } else {
-            warn!("{}", t!("no_system_lang_using_english"));
-            self.set_language("en")?;
-        }
-
-        Ok(())
     }
 
     /// Get normalized EDA type
@@ -296,7 +221,6 @@ mod tests {
     #[test]
     fn test_eda_type_conversion() {
         let config = Config {
-            language: "en".to_string(),
             eda: "kicad".to_string(),
             path: PathBuf::from("."),
             output_path: PathBuf::from("./output"),
@@ -312,7 +236,6 @@ mod tests {
     #[test]
     fn test_custom_eda_type() {
         let config = Config {
-            language: "en".to_string(),
             eda: "custom_eda".to_string(),
             path: PathBuf::from("."),
             output_path: PathBuf::from("./output"),

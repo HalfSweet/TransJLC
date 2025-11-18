@@ -8,7 +8,6 @@ use anyhow::Context;
 use md5::{Digest, Md5};
 use rand::Rng;
 use regex::Regex;
-use rust_i18n::t;
 use tracing::{debug, info, warn};
 
 /// Gerber file processor for format-specific conversions
@@ -63,7 +62,7 @@ impl GerberProcessor {
         content: String,
         needs_g54_aperture_prefix: bool,
     ) -> Result<String> {
-        info!("{}", t!("gerber.processing"));
+        info!("Processing Gerber files...");
 
         let mut processed_content = content;
 
@@ -98,7 +97,7 @@ impl GerberProcessor {
 
     /// Convert aperture format from Dx* to G54Dx* when missing
     fn add_missing_g54_aperture_prefix(&self, content: String) -> Result<String> {
-        info!("{}", t!("gerber.converting_apertures", file = "gerber"));
+        info!("Converting aperture selections to include G54 prefixes");
 
         let lines: Vec<&str> = content.split('\n').collect();
         let mut result_lines = Vec::new();

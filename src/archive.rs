@@ -6,7 +6,6 @@
 use crate::error::{Result, ResultExt, TransJlcError};
 use anyhow::Context;
 use indicatif::{ProgressBar, ProgressStyle};
-use rust_i18n::t;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -36,13 +35,7 @@ impl ArchiveExtractor {
             return Ok(input_path.to_path_buf());
         }
 
-        info!(
-            "{}",
-            t!(
-                "archive.extracting",
-                file = input_path.display().to_string()
-            )
-        );
+        info!("Extracting archive: {}", input_path.display());
 
         // Create temporary directory
         let temp_dir =
@@ -86,7 +79,7 @@ impl ArchiveExtractor {
             })?;
 
         let total_files = archive.len();
-        info!("{}", t!("archive.extracted_files", count = total_files));
+        info!("Extracted {} entries from archive", total_files);
 
         let progress = if show_progress {
             let pb = ProgressBar::new(total_files as u64);
@@ -169,10 +162,7 @@ impl ArchiveCreator {
             .map(|p| p.as_ref().to_path_buf())
             .collect();
 
-        info!(
-            "{}",
-            t!("archive.creating", file = output_path.display().to_string())
-        );
+        info!("Creating archive: {}", output_path.display());
 
         // Create output directory if it doesn't exist
         if let Some(parent) = output_path.parent() {

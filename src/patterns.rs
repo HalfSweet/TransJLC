@@ -5,7 +5,6 @@
 
 use crate::error::{Result, TransJlcError};
 use regex::Regex;
-use rust_i18n::t;
 use std::collections::HashMap;
 use std::path::Path;
 use tracing::{debug, info, warn};
@@ -377,7 +376,7 @@ impl PatternMatcher {
             })
             .collect();
 
-        info!("{}", t!("patterns.detecting_type", count = filenames.len()));
+        info!("Detecting EDA tool type for {} files...", filenames.len());
         debug!("Files to analyze: {:?}", filenames);
 
         // Log individual filenames for debugging
@@ -408,10 +407,7 @@ impl PatternMatcher {
             debug!("Pattern '{}' matched {} files", pattern.name, matches);
 
             if pattern.can_handle_files(&filenames) {
-                info!(
-                    "{}",
-                    t!("patterns.detected_pattern", pattern = &pattern.name)
-                );
+                info!("Detected pattern: {}", &pattern.name);
                 return Ok(pattern);
             } else {
                 debug!(
@@ -421,7 +417,7 @@ impl PatternMatcher {
             }
         }
 
-        warn!("{}", t!("patterns.no_pattern_found"));
+        warn!("No known EDA pattern detected");
         Err(TransJlcError::NoMatchingPattern.into())
     }
 

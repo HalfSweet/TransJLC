@@ -58,7 +58,6 @@ fn create_test_files(files: &[(&str, &str)]) -> TempDir {
 /// Create a test configuration
 fn create_test_config(input_path: PathBuf, output_path: PathBuf, eda: EdaType) -> Config {
     Config {
-        language: "en".to_string(),
         eda: eda.as_str().to_string(),
         path: input_path,
         output_path,
@@ -297,7 +296,6 @@ fn test_config_eda_type_parsing() {
 
     for (input, expected) in test_cases {
         let config = Config {
-            language: "en".to_string(),
             eda: input.to_string(),
             path: PathBuf::from("."),
             output_path: PathBuf::from("./output"),

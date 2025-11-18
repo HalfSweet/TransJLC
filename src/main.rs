@@ -5,11 +5,8 @@
 
 #![allow(non_snake_case)]
 
-use rust_i18n::t;
 use tracing::{error, info};
 use TransJLC::{config::Config, converter::Converter, error::Result};
-
-rust_i18n::i18n!("i18n");
 
 fn main() -> Result<()> {
     // Parse configuration and initialize logging
@@ -18,8 +15,7 @@ fn main() -> Result<()> {
         std::process::exit(1);
     });
 
-    // Language settings are already applied in from_args()
-    info!("{}", t!("converter.starting"));
+    info!("Starting conversion process...");
     if config.verbose {
         info!("Configuration: {:?}", config);
     }
@@ -30,16 +26,10 @@ fn main() -> Result<()> {
     match converter.run() {
         Ok(()) => {
             let stats = converter.get_conversion_stats();
-            info!("{}", t!("converter.conversion_complete", time = 0));
-            info!(
-                "{}",
-                t!(
-                    "converter.files_processed",
-                    count = stats.total_files_processed
-                )
-            );
+            info!("Conversion completed successfully");
+            info!("Processed {} files", stats.total_files_processed);
 
-            println!("{}", t!("converter.conversion_complete", time = 0));
+            println!("Conversion completed successfully");
             Ok(())
         }
         Err(e) => {

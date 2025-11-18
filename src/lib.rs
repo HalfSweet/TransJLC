@@ -18,6 +18,3 @@ pub mod progress;
 pub use config::{Config, EdaType};
 pub use converter::{ConversionStats, Converter};
 pub use error::{Result, ResultExt, TransJlcError};
-
-// Initialize i18n for the library
-rust_i18n::i18n!("i18n");
