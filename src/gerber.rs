@@ -1,7 +1,7 @@
 //! Gerber file processing and format conversion
 //!
 //! This module handles Gerber file format-specific operations including
-//! KiCad aperture format conversion and hash aperture generation.
+//! aperture prefix normalization and hash aperture generation.
 
 use crate::error::Result;
 use anyhow::Context;
@@ -58,7 +58,11 @@ impl GerberProcessor {
     }
 
     /// Process a Gerber file content with all necessary transformations
-    pub fn process_gerber_content(&self, content: String, is_kicad: bool) -> Result<String> {
+    pub fn process_gerber_content(
+        &self,
+        content: String,
+        needs_g54_aperture_prefix: bool,
+    ) -> Result<String> {
         info!("{}", t!("gerber.processing"));
 
         let mut processed_content = content;
@@ -66,10 +70,10 @@ impl GerberProcessor {
         // Add header information
         processed_content = self.add_gerber_header(processed_content);
 
-        // Apply KiCad-specific transformations if needed
-        if is_kicad {
-            debug!("Applying KiCad-specific transformations");
-            processed_content = self.convert_kicad_aperture_format(processed_content)?;
+        // Apply aperture prefix normalization when required
+        if needs_g54_aperture_prefix {
+            debug!("Ensuring G54 aperture prefixes are present");
+            processed_content = self.add_missing_g54_aperture_prefix(processed_content)?;
         }
 
         // Add hash aperture for file fingerprinting
@@ -92,30 +96,55 @@ impl GerberProcessor {
         format!("{}{}", header, normalized)
     }
 
-    /// Convert KiCad aperture format from Dx* to G54Dx*
-    fn convert_kicad_aperture_format(&self, content: String) -> Result<String> {
+    /// Convert aperture format from Dx* to G54Dx* when missing
+    fn add_missing_g54_aperture_prefix(&self, content: String) -> Result<String> {
         info!("{}", t!("gerber.converting_apertures", file = "gerber"));
 
         let lines: Vec<&str> = content.split('\n').collect();
         let mut result_lines = Vec::new();
-
-        // Regex to match standalone Dx* format (not part of %ADD or G54D)
+        // Match lines that start with Dx* (optional whitespace before D)
         let aperture_regex =
-            Regex::new(r"(D\d{2,4}\*)").context("Failed to compile aperture regex")?;
+            Regex::new(r"^(\s*)(D\d{2,4}\*)").context("Failed to compile aperture regex")?;
 
         for line in lines {
-            // Skip lines that already contain %ADD or G54D
-            if line.contains("%ADD") || line.contains("G54D") {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("%ADD") || trimmed.starts_with("G54D") {
                 result_lines.push(line.to_string());
+                continue;
+            }
+
+            if let Some(caps) = aperture_regex.captures(line) {
+                let leading_ws = caps.get(1).map_or("", |m| m.as_str());
+                let aperture = caps.get(2).map_or("", |m| m.as_str());
+                let matched_len = caps.get(0).map_or(0, |m| m.end());
+                let rest = &line[matched_len..];
+                result_lines.push(format!("{leading_ws}G54{aperture}{rest}"));
             } else {
-                // Convert Dx* to G54Dx* in other lines
-                let modified_line = aperture_regex.replace_all(line, "G54$1");
-                result_lines.push(modified_line.to_string());
+                result_lines.push(line.to_string());
             }
         }
 
-        debug!("KiCad aperture format conversion completed");
+        debug!("Aperture prefix normalization completed");
         Ok(result_lines.join("\n"))
+    }
+
+    /// Check if the content still has apertures missing the G54 prefix
+    pub(crate) fn has_missing_g54_aperture_prefix(&self, content: &str) -> Result<bool> {
+        let aperture_regex =
+            Regex::new(r"^(\s*)D\d{2,4}\*").context("Failed to compile aperture regex")?;
+
+        for line in content.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("%ADD") || trimmed.starts_with("G54D") {
+                continue;
+            }
+
+            if aperture_regex.is_match(line) {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
     }
 
     /// Add hash aperture to Gerber file for fingerprinting
@@ -393,12 +422,12 @@ mod tests {
     }
 
     #[test]
-    fn test_kicad_aperture_conversion() {
+    fn test_g54_aperture_conversion() {
         let processor = GerberProcessor::new();
         let test_content = "G04 Test*\nD10*\nG54D11*\n%ADD12C,0.1*%\nD13*".to_string();
 
         let result = processor
-            .convert_kicad_aperture_format(test_content)
+            .add_missing_g54_aperture_prefix(test_content)
             .unwrap();
 
         // D10* should be converted to G54D10*
@@ -446,5 +475,39 @@ mod tests {
 
         // Should return original content unchanged for large files
         assert_eq!(result, large_content);
+    }
+
+    #[test]
+    fn test_detect_missing_g54_prefix() {
+        let processor = GerberProcessor::new();
+        let needs_fix = processor
+            .has_missing_g54_aperture_prefix("D10*\nG54D11*\n")
+            .unwrap();
+
+        assert!(needs_fix);
+
+        let no_fix = processor
+            .has_missing_g54_aperture_prefix("G54D10*\n%ADD12C,0.1*%\n")
+            .unwrap();
+
+        assert!(!no_fix);
+
+        let inline_only = processor
+            .has_missing_g54_aperture_prefix("X30584000Y-7866000D03*\n")
+            .unwrap();
+
+        assert!(!inline_only);
+    }
+
+    #[test]
+    fn test_inline_d_codes_not_modified() {
+        let processor = GerberProcessor::new();
+        let content = "X30584000Y-7866000D03*\nD10*\n";
+        let result = processor
+            .add_missing_g54_aperture_prefix(content.to_string())
+            .unwrap();
+
+        assert!(result.contains("X30584000Y-7866000D03*"));
+        assert!(result.contains("G54D10*"));
     }
 }

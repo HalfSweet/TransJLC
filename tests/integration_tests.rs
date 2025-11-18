@@ -164,15 +164,15 @@ fn test_auto_detection_protel() {
 }
 
 #[test]
-fn test_gerber_processor_kicad_conversion() {
-    let processor = GerberProcessor::new();
+fn test_gerber_processor_g54_prefix_conversion() {
+    let processor = GerberProcessor::new().with_ignore_hash(true);
     let test_content =
         "G04 Test file*\nD10*\nG01X100Y100D01*\nD11*\nG54D12*\n%ADD13C,0.1*%\nD14*\nM02*"
             .to_string();
 
     let result = processor
         .process_gerber_content(test_content, true)
-        .expect("Should process KiCad content successfully");
+        .expect("Should add missing G54 prefixes successfully");
 
     // Check that standalone D codes are converted to G54D format
     assert!(result.contains("G54D10*"));
@@ -322,7 +322,7 @@ fn test_large_file_processing_performance() {
     let large_content = "G04 Test*\nG01*\n".repeat(50000);
 
     let start = Instant::now();
-    let result = processor.process_gerber_content(large_content, true);
+    let result = processor.process_gerber_content(large_content, false);
     let duration = start.elapsed();
 
     assert!(result.is_ok());

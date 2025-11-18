@@ -186,10 +186,10 @@ impl Converter {
         let progress = self
             .progress_tracker
             .create_conversion_progress(files.len());
-        let is_kicad = patterns.name.to_lowercase().contains("kicad");
+        let needs_g54_aperture_prefix = self.determine_g54_requirement(files, patterns)?;
 
         for file in files {
-            self.process_single_file(file, patterns, working_path, is_kicad)
+            self.process_single_file(file, patterns, working_path, needs_g54_aperture_prefix)
                 .with_path_context("process file", file)?;
 
             ProgressTracker::update_progress(&progress, 1, None);
@@ -213,7 +213,7 @@ impl Converter {
         file_path: &Path,
         patterns: &EdaPatterns,
         _working_path: &Path,
-        is_kicad: bool,
+        needs_g54_aperture_prefix: bool,
     ) -> Result<()> {
         let filename = file_path
             .file_name()
@@ -237,7 +237,7 @@ impl Converter {
             // Apply processing if it's a Gerber file (not drill files)
             let processed_content = if self.should_process_gerber(&layer_type) {
                 self.gerber_processor
-                    .process_gerber_content(content, is_kicad)?
+                    .process_gerber_content(content, needs_g54_aperture_prefix)?
             } else {
                 content
             };
@@ -253,6 +253,34 @@ impl Converter {
         }
 
         Ok(())
+    }
+
+    /// Determine whether any target file is missing the required G54 aperture prefix
+    fn determine_g54_requirement(&self, files: &[PathBuf], patterns: &EdaPatterns) -> Result<bool> {
+        for file in files {
+            let Some(filename) = file.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+
+            let Some(layer_type) = patterns.match_filename(filename) else {
+                continue;
+            };
+
+            if !self.should_process_gerber(&layer_type) {
+                continue;
+            }
+
+            let content = fs::read_to_string(file).with_path_context("read file content", file)?;
+
+            if self
+                .gerber_processor
+                .has_missing_g54_aperture_prefix(&content)?
+            {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
     }
 
     /// Determine if a layer type should undergo Gerber processing
@@ -382,6 +410,7 @@ pub struct ConversionStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_converter_creation() {
@@ -475,5 +504,44 @@ mod tests {
         assert_eq!(stats.output_format, "ZIP");
         assert!(stats.layer_types_found.contains(&LayerType::TopCopper));
         assert!(stats.layer_types_found.contains(&LayerType::BottomCopper));
+    }
+
+    #[test]
+    fn test_determine_g54_requirement() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let file_missing = temp_dir.path().join("project-F_Cu.gbr");
+        let file_prefixed = temp_dir.path().join("project-B_Cu.gbr");
+
+        fs::write(&file_missing, "G04*\nD10*\n").expect("Failed to write missing file");
+        fs::write(&file_prefixed, "G04*\nG54D11*\n").expect("Failed to write prefixed file");
+
+        let config = Config {
+            language: "en".to_string(),
+            eda: "kicad".to_string(),
+            path: PathBuf::from("."),
+            output_path: PathBuf::from("./output"),
+            zip: false,
+            zip_name: "test".to_string(),
+            verbose: false,
+            no_progress: true,
+        };
+
+        let converter = Converter::new(config);
+        let patterns = PatternMatcher::create_kicad_patterns();
+        let files = vec![file_missing.clone(), file_prefixed.clone()];
+
+        let needs_prefix = converter
+            .determine_g54_requirement(&files, &patterns)
+            .expect("Detection should succeed");
+
+        assert!(needs_prefix);
+
+        fs::write(&file_missing, "G04*\nG54D10*\n").expect("Failed to rewrite missing file");
+
+        let needs_prefix = converter
+            .determine_g54_requirement(&files, &patterns)
+            .expect("Detection should succeed");
+
+        assert!(!needs_prefix);
     }
 }
