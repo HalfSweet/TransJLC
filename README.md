@@ -22,7 +22,6 @@
 -   Automatically identifies Gerber files from common EDA software (KiCad, Protel, Altium Designer).
 -   Renames files to match JLCPCB's required naming conventions.
 -   Can automatically compress the output files into a ZIP archive for easy uploading.
--   Supports multiple languages for the user interface (English, Chinese, Japanese).
 -   Cross-platform support (Windows, macOS, Linux).
 
 ## 📦 Installation
@@ -59,7 +58,6 @@ Run the tool from your terminal, providing the necessary options.
 
 | Option          | Short | Description                                                                                             | Default     |
 | --------------- | ----- | ------------------------------------------------------------------------------------------------------- | ----------- |
-| `--language`    | `-l`  | Sets the display language. Available: `auto`, `en`, `zh-CN`, `ja`.                                        | `auto`      |
 | `--eda`         | `-e`  | Specifies the source EDA software. Available: `auto`, `kicad`, `jlc`, `protel`.                         | `auto`      |
 | `--path`        | `-p`  | The path to the directory containing your Gerber files.                                                 | `.` (current dir) |
 | `--output_path` | `-o`  | The path where the converted files will be saved.                                                       | `./output`  |
