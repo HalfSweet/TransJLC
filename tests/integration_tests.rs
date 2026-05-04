@@ -6,7 +6,6 @@
 use std::{fs, path::PathBuf};
 use tempfile::TempDir;
 use TransJLC::{
-    archive::ArchiveExtractor,
     config::{Config, EdaType},
     converter::Converter,
     gerber::GerberProcessor,
@@ -67,6 +66,10 @@ fn create_test_config(input_path: PathBuf, output_path: PathBuf, eda: EdaType) -
         no_progress: true, // Disable progress bars in tests
         top_color_image: None,
         bottom_color_image: None,
+        inject_header: false,
+        no_inject_header: false,
+        passthrough: false,
+        no_passthrough: false,
     }
 }
 
@@ -259,8 +262,10 @@ fn test_archive_extractor_zip_detection() {
 
     // Test non-ZIP file (should return original path)
     let non_zip_path = Path::new("test.txt");
-    // Note: This would require actual file for full test
-    // We're testing the logic structure here
+    let result = extractor
+        .extract_if_needed(non_zip_path, false)
+        .expect("non-ZIP path should be returned as-is");
+    assert_eq!(result, non_zip_path);
 }
 
 #[test]
@@ -281,6 +286,105 @@ fn test_conversion_stats() {
     // Should start with no processed files
     assert_eq!(stats.total_files_processed, 0);
     assert_eq!(stats.output_format, "Files"); // Not ZIP mode
+}
+
+#[test]
+fn test_jlc_mode_passthrough_and_no_header_by_default() {
+    let temp_input = TempDir::new().expect("Failed to create input temp dir");
+    let temp_output = TempDir::new().expect("Failed to create output temp dir");
+    let gerber = "%FSLAX24Y24*%\n%MOMM*%\n%ADD10C,0.1*%\nG54D10*\nX0Y0D02*\nM02*\n";
+
+    fs::write(temp_input.path().join("Gerber_TopLayer.GTL"), gerber).unwrap();
+    fs::write(
+        temp_input.path().join("Gerber_DrillDrawingLayer.GDD"),
+        "GDD raw content",
+    )
+    .unwrap();
+    fs::write(
+        temp_input.path().join("FlyingProbeTesting.json"),
+        "{\"probe\":true}",
+    )
+    .unwrap();
+
+    let config = create_test_config(
+        temp_input.path().to_path_buf(),
+        temp_output.path().to_path_buf(),
+        EdaType::Jlc,
+    );
+    let mut converter = Converter::new(config);
+    converter.run().expect("JLC conversion should succeed");
+
+    let top = fs::read_to_string(temp_output.path().join("Gerber_TopLayer.GTL")).unwrap();
+    assert!(!top.contains("G04 Gerber Generator version 0.3*"));
+    assert!(GerberProcessor::new().verify_hash_aperture(&top).unwrap());
+
+    let gdd = fs::read_to_string(temp_output.path().join("Gerber_DrillDrawingLayer.GDD")).unwrap();
+    assert_eq!(gdd, "GDD raw content");
+
+    let json = fs::read_to_string(temp_output.path().join("FlyingProbeTesting.json")).unwrap();
+    assert_eq!(json, "{\"probe\":true}");
+}
+
+#[test]
+fn test_protel_txt_drill_is_matched_and_normalized() {
+    let temp_input = TempDir::new().expect("Failed to create input temp dir");
+    let temp_output = TempDir::new().expect("Failed to create output temp dir");
+    let gerber = "%FSLAX24Y24*%\n%MOMM*%\n%ADD10C,0.1*%\nG54D10*\nX0Y0D02*\nM02*\n";
+
+    fs::write(temp_input.path().join("project.GTL"), gerber).unwrap();
+    fs::write(temp_input.path().join("project.GBL"), gerber).unwrap();
+    fs::write(temp_input.path().join("project.GTS"), gerber).unwrap();
+    fs::write(temp_input.path().join("project.GKO"), gerber).unwrap();
+    fs::write(
+        temp_input.path().join("project.TXT"),
+        "M48\nT01C.01\n%\nM30\n",
+    )
+    .unwrap();
+
+    let config = create_test_config(
+        temp_input.path().to_path_buf(),
+        temp_output.path().to_path_buf(),
+        EdaType::Protel,
+    );
+    let mut converter = Converter::new(config);
+    converter.run().expect("Protel conversion should succeed");
+
+    let drill = fs::read_to_string(temp_output.path().join("Drill_PTH_Through.DRL")).unwrap();
+    assert!(drill.contains("T01C0.01"));
+}
+
+#[test]
+fn test_duplicate_layer_keeps_first_sorted_match() {
+    let temp_input = TempDir::new().expect("Failed to create input temp dir");
+    let temp_output = TempDir::new().expect("Failed to create output temp dir");
+    let gerber = "%FSLAX24Y24*%\n%MOMM*%\n%ADD10C,0.1*%\nG54D10*\nX0Y0D02*\nM02*\n";
+
+    fs::write(temp_input.path().join("project.GTL"), gerber).unwrap();
+    fs::write(temp_input.path().join("project.GBL"), gerber).unwrap();
+    fs::write(temp_input.path().join("project.GTS"), gerber).unwrap();
+    fs::write(
+        temp_input.path().join("project.GKO"),
+        format!("G04 GKO outline*\n{}", gerber),
+    )
+    .unwrap();
+    fs::write(
+        temp_input.path().join("project.GM1"),
+        format!("G04 GM1 outline*\n{}", gerber),
+    )
+    .unwrap();
+
+    let config = create_test_config(
+        temp_input.path().to_path_buf(),
+        temp_output.path().to_path_buf(),
+        EdaType::Protel,
+    );
+    let mut converter = Converter::new(config);
+    converter.run().expect("Protel conversion should succeed");
+
+    let outline =
+        fs::read_to_string(temp_output.path().join("Gerber_BoardOutlineLayer.GKO")).unwrap();
+    assert!(outline.contains("G04 GKO outline*"));
+    assert!(!outline.contains("G04 GM1 outline*"));
 }
 
 #[test]
@@ -307,6 +411,10 @@ fn test_config_eda_type_parsing() {
             no_progress: false,
             top_color_image: None,
             bottom_color_image: None,
+            inject_header: false,
+            no_inject_header: false,
+            passthrough: false,
+            no_passthrough: false,
         };
 
         assert_eq!(config.get_eda_type(), expected);

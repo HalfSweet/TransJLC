@@ -15,7 +15,7 @@ use crate::{
 use anyhow::Context;
 use rust_embed::RustEmbed;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -32,6 +32,7 @@ pub struct Converter {
     archive_extractor: ArchiveExtractor,
     gerber_processor: GerberProcessor,
     processed_files: HashMap<LayerType, PathBuf>,
+    extra_files: Vec<PathBuf>,
 }
 
 impl Converter {
@@ -45,6 +46,7 @@ impl Converter {
             archive_extractor: ArchiveExtractor::new(),
             gerber_processor: GerberProcessor::new(),
             processed_files: HashMap::new(),
+            extra_files: Vec::new(),
         }
     }
 
@@ -72,9 +74,23 @@ impl Converter {
         let patterns = self
             .create_pattern_matcher(&files)
             .context("Failed to create pattern matcher")?;
+        let eda_kind = patterns.name.to_lowercase();
+        let inject_header = self
+            .config
+            .inject_header_override()
+            .unwrap_or(eda_kind != "jlc");
+        let pass_through_unmatched = self
+            .config
+            .pass_through_unmatched_override()
+            .unwrap_or(eda_kind == "jlc");
+        self.gerber_processor = GerberProcessor::new().with_inject_header(inject_header);
+        info!(
+            "Using EDA={} inject_header={} pass_through_unmatched={}",
+            eda_kind, inject_header, pass_through_unmatched
+        );
 
         // Process files
-        self.process_files(&files, &patterns, &working_path)
+        self.process_files(&files, &patterns, &working_path, pass_through_unmatched)
             .context("Failed to process files")?;
 
         // Add required assets
@@ -109,7 +125,7 @@ impl Converter {
     fn discover_files(&self, working_path: &Path) -> Result<Vec<PathBuf>> {
         info!("Processing files in {}", working_path.display());
 
-        let files = fs::read_dir(working_path)
+        let mut files = fs::read_dir(working_path)
             .with_path_context("read directory", working_path)?
             .filter_map(|entry| {
                 entry.ok().and_then(|e| {
@@ -122,6 +138,7 @@ impl Converter {
                 })
             })
             .collect::<Vec<_>>();
+        files.sort();
 
         info!("Discovered {} files", files.len());
         debug!("Files found: {:?}", files);
@@ -172,6 +189,7 @@ impl Converter {
         files: &[PathBuf],
         patterns: &EdaPatterns,
         working_path: &Path,
+        pass_through_unmatched: bool,
     ) -> Result<()> {
         info!("Processing Gerber files...");
 
@@ -181,8 +199,14 @@ impl Converter {
         let needs_g54_aperture_prefix = self.determine_g54_requirement(files, patterns)?;
 
         for file in files {
-            self.process_single_file(file, patterns, working_path, needs_g54_aperture_prefix)
-                .with_path_context("process file", file)?;
+            self.process_single_file(
+                file,
+                patterns,
+                working_path,
+                needs_g54_aperture_prefix,
+                pass_through_unmatched,
+            )
+            .with_path_context("process file", file)?;
 
             ProgressTracker::update_progress(&progress, 1, None);
         }
@@ -200,6 +224,7 @@ impl Converter {
         patterns: &EdaPatterns,
         _working_path: &Path,
         needs_g54_aperture_prefix: bool,
+        pass_through_unmatched: bool,
     ) -> Result<()> {
         let filename = file_path
             .file_name()
@@ -208,9 +233,28 @@ impl Converter {
 
         debug!("Processing file: {}", filename);
 
+        if filename == "PCB下单必读.txt" {
+            debug!("Skipping source ordering instruction asset: {}", filename);
+            return Ok(());
+        }
+
         // Try to match the file to a layer type
         if let Some(layer_type) = patterns.match_filename(filename) {
             info!("Matched {} to layer type: {:?}", filename, layer_type);
+            if matches!(layer_type, LayerType::Other) {
+                debug!("Skipping file matched as Other: {}", filename);
+                return Ok(());
+            }
+
+            if let Some(existing) = self.processed_files.get(&layer_type) {
+                warn!(
+                    "Layer {:?} is already filled by {}; skipping {}",
+                    layer_type,
+                    existing.display(),
+                    filename
+                );
+                return Ok(());
+            }
 
             // Determine output filename and path
             let output_filename = layer_type.to_jlc_filename();
@@ -225,7 +269,8 @@ impl Converter {
                 self.gerber_processor
                     .process_gerber_content(content, needs_g54_aperture_prefix)?
             } else {
-                content
+                self.gerber_processor
+                    .normalize_excellon_drill_content(content)?
             };
 
             // Write processed content
@@ -234,6 +279,11 @@ impl Converter {
 
             // Track the processed file
             self.processed_files.insert(layer_type, output_path);
+        } else if pass_through_unmatched {
+            let output_path = self.get_output_file_path(filename);
+            self.copy_passthrough_file(file_path, &output_path)
+                .with_path_context("pass through unmatched file", file_path)?;
+            self.extra_files.push(output_path);
         } else {
             debug!("No pattern match for file: {}", filename);
         }
@@ -304,6 +354,26 @@ impl Converter {
         Ok(())
     }
 
+    /// Copy an unmatched file into the working output directory without changing bytes
+    fn copy_passthrough_file(&self, input_path: &Path, output_path: &Path) -> Result<()> {
+        if input_path == output_path {
+            debug!(
+                "Pass-through source and destination are identical: {}",
+                input_path.display()
+            );
+            return Ok(());
+        }
+
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).with_path_context("create output directory", parent)?;
+        }
+
+        fs::copy(input_path, output_path)
+            .with_path_context("copy pass-through file", output_path)?;
+        debug!("Pass-through file copied: {}", output_path.display());
+        Ok(())
+    }
+
     /// Add required assets (like PCB ordering instructions)
     fn add_required_assets(&mut self) -> Result<()> {
         info!("Adding required assets");
@@ -329,7 +399,7 @@ impl Converter {
     fn create_output(&self) -> Result<()> {
         info!("Creating final output");
 
-        let file_paths: Vec<PathBuf> = self.processed_files.values().cloned().collect();
+        let file_paths = self.collect_output_files();
 
         if self.config.zip {
             // Create ZIP archive
@@ -364,8 +434,10 @@ impl Converter {
             if let Some(filename) = file_path.file_name() {
                 let dest_path = self.config.output_path.join(filename);
 
-                fs::copy(file_path, &dest_path)
-                    .with_path_context("copy file to output", &dest_path)?;
+                if file_path != &dest_path {
+                    fs::copy(file_path, &dest_path)
+                        .with_path_context("copy file to output", &dest_path)?;
+                }
 
                 ProgressTracker::update_progress(&progress, 1, None);
             }
@@ -375,10 +447,25 @@ impl Converter {
         Ok(())
     }
 
+    /// Collect processed and pass-through output paths, deduplicating while preserving order
+    fn collect_output_files(&self) -> Vec<PathBuf> {
+        let mut seen = HashSet::new();
+        let mut files = Vec::new();
+
+        for path in self.processed_files.values().chain(self.extra_files.iter()) {
+            if seen.insert(path.clone()) {
+                files.push(path.clone());
+            }
+        }
+
+        files
+    }
+
     /// Get statistics about the conversion process
     pub fn get_conversion_stats(&self) -> ConversionStats {
         ConversionStats {
             total_files_processed: self.processed_files.len(),
+            total_extra_files: self.extra_files.len(),
             layer_types_found: self.processed_files.keys().cloned().collect(),
             output_format: if self.config.zip { "ZIP" } else { "Files" }.to_string(),
         }
@@ -426,6 +513,7 @@ impl Converter {
 #[derive(Debug)]
 pub struct ConversionStats {
     pub total_files_processed: usize,
+    pub total_extra_files: usize,
     pub layer_types_found: Vec<LayerType>,
     pub output_format: String,
 }
@@ -447,6 +535,10 @@ mod tests {
             no_progress: true,
             top_color_image: None,
             bottom_color_image: None,
+            inject_header: false,
+            no_inject_header: false,
+            passthrough: false,
+            no_passthrough: false,
         };
 
         let converter = Converter::new(config);
@@ -465,6 +557,10 @@ mod tests {
             no_progress: true,
             top_color_image: None,
             bottom_color_image: None,
+            inject_header: false,
+            no_inject_header: false,
+            passthrough: false,
+            no_passthrough: false,
         };
 
         let converter = Converter::new(config);
@@ -486,6 +582,10 @@ mod tests {
             no_progress: true,
             top_color_image: None,
             bottom_color_image: None,
+            inject_header: false,
+            no_inject_header: false,
+            passthrough: false,
+            no_passthrough: false,
         };
 
         let converter = Converter::new(config);
@@ -513,6 +613,10 @@ mod tests {
             no_progress: true,
             top_color_image: None,
             bottom_color_image: None,
+            inject_header: false,
+            no_inject_header: false,
+            passthrough: false,
+            no_passthrough: false,
         };
 
         let mut converter = Converter::new(config);
@@ -552,6 +656,10 @@ mod tests {
             no_progress: true,
             top_color_image: None,
             bottom_color_image: None,
+            inject_header: false,
+            no_inject_header: false,
+            passthrough: false,
+            no_passthrough: false,
         };
 
         let converter = Converter::new(config);

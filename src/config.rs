@@ -3,7 +3,7 @@
 //! This module handles CLI argument parsing and application settings.
 
 use anyhow::{anyhow, Context, Result};
-use clap::{ColorChoice, Parser};
+use clap::{ArgAction, ColorChoice, Parser};
 use std::path::PathBuf;
 use tracing::info;
 
@@ -86,12 +86,53 @@ pub struct Config {
         help = "Path to colorful silkscreen image for the bottom layer"
     )]
     pub bottom_color_image: Option<PathBuf>,
+
+    /// Force synthetic EasyEDA Pro header injection
+    #[arg(
+        long = "inject-header",
+        action = ArgAction::SetTrue,
+        conflicts_with = "no_inject_header",
+        help = "Force synthetic EasyEDA Pro header injection"
+    )]
+    pub inject_header: bool,
+
+    /// Disable synthetic EasyEDA Pro header injection
+    #[arg(
+        long = "no-inject-header",
+        action = ArgAction::SetTrue,
+        conflicts_with = "inject_header",
+        help = "Disable synthetic EasyEDA Pro header injection"
+    )]
+    pub no_inject_header: bool,
+
+    /// Keep unmatched files in the output
+    #[arg(
+        long = "passthrough",
+        action = ArgAction::SetTrue,
+        conflicts_with = "no_passthrough",
+        help = "Keep files that do not match a known production layer"
+    )]
+    pub passthrough: bool,
+
+    /// Drop unmatched files from the output
+    #[arg(
+        long = "no-passthrough",
+        action = ArgAction::SetTrue,
+        conflicts_with = "passthrough",
+        help = "Drop files that do not match a known production layer"
+    )]
+    pub no_passthrough: bool,
 }
 
 impl Config {
+    /// Parse CLI arguments without initializing logging
+    pub fn parse() -> Self {
+        <Self as Parser>::parse()
+    }
+
     /// Parse arguments and apply initial configuration
     pub fn from_args() -> Result<Self> {
-        let config = Config::parse();
+        let config = Self::parse();
 
         // Set up tracing with environment variable support
         // RUST_LOG takes precedence over verbose flag
@@ -115,6 +156,24 @@ impl Config {
             "protel" => EdaType::Protel,
             "jlc" => EdaType::Jlc,
             custom => EdaType::Custom(custom.to_string()),
+        }
+    }
+
+    /// User override for synthetic EasyEDA Pro header injection
+    pub fn inject_header_override(&self) -> Option<bool> {
+        match (self.inject_header, self.no_inject_header) {
+            (true, false) => Some(true),
+            (false, true) => Some(false),
+            _ => None,
+        }
+    }
+
+    /// User override for unmatched-file pass-through
+    pub fn pass_through_unmatched_override(&self) -> Option<bool> {
+        match (self.passthrough, self.no_passthrough) {
+            (true, false) => Some(true),
+            (false, true) => Some(false),
+            _ => None,
         }
     }
 
@@ -201,6 +260,10 @@ mod tests {
             no_progress: false,
             top_color_image: None,
             bottom_color_image: None,
+            inject_header: false,
+            no_inject_header: false,
+            passthrough: false,
+            no_passthrough: false,
         };
 
         assert_eq!(config.get_eda_type(), EdaType::KiCad);
@@ -218,6 +281,10 @@ mod tests {
             no_progress: false,
             top_color_image: None,
             bottom_color_image: None,
+            inject_header: false,
+            no_inject_header: false,
+            passthrough: false,
+            no_passthrough: false,
         };
 
         assert_eq!(
