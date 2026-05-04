@@ -63,6 +63,9 @@ Run the tool from your terminal, providing the necessary options.
 | `--output_path` | `-o`  | The path where the converted files will be saved.                                                       | `./output`  |
 | `--zip`         | `-z`  | If set to `true`, creates a ZIP archive of the output files.                                            | `false`     |
 | `--zip_name`    | `-n`  | The name of the generated ZIP file (without the `.zip` extension).                                      | `Gerber`    |
+| `--no-progress` |       | Disables progress indicators.                                                                          | `false`     |
+| `--inject-header` / `--no-inject-header` | | Force synthetic EasyEDA Pro header injection on or off. Auto mode disables it for `--eda jlc` and enables it for other EDAs. | Auto |
+| `--passthrough` / `--no-passthrough` | | Force unmatched files to be kept or dropped. Auto mode keeps them for `--eda jlc` and drops them for other EDAs. | Auto |
 | `--top_color_image` |     | Optional: path to a top-layer colorful silkscreen image (generates `Fabrication_ColorfulTopSilkscreen.FCTS`). | _None_ |
 | `--bottom_color_image` |  | Optional: path to a bottom-layer colorful silkscreen image (generates `Fabrication_ColorfulBottomSilkscreen.FCBS`). | _None_ |
 
