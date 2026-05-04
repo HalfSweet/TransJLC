@@ -6,11 +6,12 @@
 use crate::error::{Result, ResultExt, TransJlcError};
 use anyhow::Context;
 use indicatif::{ProgressBar, ProgressStyle};
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use tracing::info;
+use tracing::{info, warn};
 use zip::ZipArchive;
 
 /// Archive extractor for handling ZIP input files
@@ -46,8 +47,20 @@ impl ArchiveExtractor {
         // Extract ZIP file
         self.extract_zip_to_directory(input_path, temp_path, show_progress)
             .with_path_context("extract ZIP file", input_path)?;
+        self.recursive_unzip(temp_path)
+            .with_path_context("extract nested ZIP files", input_path)?;
+        let flat_path = temp_path.join("_flat");
+        fs::create_dir_all(&flat_path)
+            .with_path_context("create flat extraction directory", &flat_path)?;
+        let flattened_count = self
+            .flatten_processable_files(temp_path, &flat_path)
+            .with_path_context("flatten extracted files", input_path)?;
 
-        let extracted_path = temp_path.to_path_buf();
+        let extracted_path = if flattened_count > 0 {
+            flat_path
+        } else {
+            temp_path.to_path_buf()
+        };
         self.temp_dir = Some(temp_dir);
 
         info!("ZIP file extracted to: {}", extracted_path.display());
@@ -101,7 +114,11 @@ impl ArchiveExtractor {
                     reason: format!("Failed to read file at index {}: {}", i, e),
                 })?;
 
-            let outpath = target_dir.join(file.name());
+            let Some(enclosed_name) = file.enclosed_name().map(|p| p.to_path_buf()) else {
+                warn!("Skipping unsafe ZIP entry path: {}", file.name());
+                continue;
+            };
+            let outpath = target_dir.join(enclosed_name);
 
             if file.is_dir() {
                 fs::create_dir_all(&outpath).with_path_context("create directory", &outpath)?;
@@ -130,6 +147,175 @@ impl ArchiveExtractor {
         }
 
         Ok(())
+    }
+
+    /// Recursively extract nested ZIP files under the extraction root
+    fn recursive_unzip(&self, root: &Path) -> Result<()> {
+        loop {
+            let mut zips = Vec::new();
+            Self::collect_files(root, &mut zips, |path| {
+                path.is_file()
+                    && path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(|ext| ext.eq_ignore_ascii_case("zip"))
+                        .unwrap_or(false)
+            })?;
+
+            if zips.is_empty() {
+                return Ok(());
+            }
+
+            for zip_path in zips {
+                let Some(parent) = zip_path.parent() else {
+                    continue;
+                };
+                self.extract_zip_to_directory(&zip_path, parent, false)
+                    .with_path_context("extract nested ZIP file", &zip_path)?;
+                if let Err(err) = fs::remove_file(&zip_path) {
+                    warn!(
+                        "Failed to remove nested ZIP after extraction ({}): {}",
+                        zip_path.display(),
+                        err
+                    );
+                }
+            }
+        }
+    }
+
+    /// Flatten processable files into one working directory
+    fn flatten_processable_files(&self, root: &Path, dest: &Path) -> Result<usize> {
+        let mut files = Vec::new();
+        Self::collect_files(root, &mut files, |path| {
+            path.is_file() && Self::looks_processable(path)
+        })?;
+
+        let mut candidates: HashMap<String, PathBuf> = HashMap::new();
+        for path in files {
+            if path.starts_with(dest) {
+                continue;
+            }
+            if path
+                .strip_prefix(root)
+                .ok()
+                .map(|relative| {
+                    relative.components().any(|component| {
+                        component
+                            .as_os_str()
+                            .to_str()
+                            .map(|part| part.starts_with("__"))
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+            {
+                continue;
+            }
+
+            let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+
+            match candidates.get(filename) {
+                None => {
+                    candidates.insert(filename.to_string(), path);
+                }
+                Some(existing) if Self::prefer_candidate(root, &path, existing) => {
+                    candidates.insert(filename.to_string(), path);
+                }
+                Some(_) => {}
+            }
+        }
+
+        let count = candidates.len();
+        for (filename, source) in candidates {
+            fs::copy(&source, dest.join(filename))
+                .with_path_context("copy flattened file", &source)?;
+        }
+
+        info!("Flattened {} processable files", count);
+        Ok(count)
+    }
+
+    fn collect_files<F>(root: &Path, files: &mut Vec<PathBuf>, predicate: F) -> Result<()>
+    where
+        F: Fn(&Path) -> bool + Copy,
+    {
+        for entry in fs::read_dir(root).with_path_context("read directory", root)? {
+            let entry = entry.with_path_context("read directory entry", root)?;
+            let path = entry.path();
+            if path.is_dir() {
+                Self::collect_files(&path, files, predicate)?;
+            } else if predicate(&path) {
+                files.push(path);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn prefer_candidate(root: &Path, new_path: &Path, old_path: &Path) -> bool {
+        let new_depth = new_path
+            .strip_prefix(root)
+            .map(|path| path.components().count())
+            .unwrap_or(usize::MAX);
+        let old_depth = old_path
+            .strip_prefix(root)
+            .map(|path| path.components().count())
+            .unwrap_or(usize::MAX);
+
+        if new_depth != old_depth {
+            return new_depth < old_depth;
+        }
+
+        let new_mtime = new_path.metadata().and_then(|meta| meta.modified()).ok();
+        let old_mtime = old_path.metadata().and_then(|meta| meta.modified()).ok();
+        new_mtime > old_mtime
+    }
+
+    fn looks_processable(path: &Path) -> bool {
+        if let Some(filename) = path.file_name().and_then(|name| name.to_str()) {
+            if filename.eq_ignore_ascii_case("FlyingProbeTesting.json") {
+                return true;
+            }
+        }
+
+        let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+            return false;
+        };
+        let ext = ext.to_ascii_lowercase();
+        matches!(
+            ext.as_str(),
+            "gtl"
+                | "gbl"
+                | "gto"
+                | "gbo"
+                | "gts"
+                | "gbs"
+                | "gtp"
+                | "gbp"
+                | "gko"
+                | "gm1"
+                | "gm2"
+                | "gm3"
+                | "gm4"
+                | "gm5"
+                | "gm9"
+                | "gm10"
+                | "gm12"
+                | "gd1"
+                | "gg1"
+                | "gbr"
+                | "drl"
+                | "txt"
+                | "tap"
+                | "nc"
+                | "gdd"
+                | "pho"
+                | "art"
+        ) || (ext.len() > 1
+            && ext.starts_with('g')
+            && ext[1..].chars().all(|ch| ch.is_ascii_digit()))
     }
 
     /// Get the temporary directory path if ZIP was extracted
@@ -225,6 +411,8 @@ impl ArchiveCreator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::tempdir;
 
     #[test]
     fn test_is_zip_file() {
@@ -250,5 +438,53 @@ mod tests {
         // Test that options are created successfully
         // The actual compression method can be verified in integration tests
         assert!(true); // Placeholder for actual verification
+    }
+
+    #[test]
+    fn test_nested_zip_is_flattened() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let inner_zip = temp_dir.path().join("inner.zip");
+        write_test_zip(
+            &inner_zip,
+            vec![
+                ("nested/project.GTL", b"top".to_vec()),
+                ("nested/FlyingProbeTesting.json", b"{\"ok\":true}".to_vec()),
+            ],
+        );
+
+        let outer_zip = temp_dir.path().join("outer.zip");
+        write_test_zip(
+            &outer_zip,
+            vec![
+                (
+                    "wrapper/inner.zip",
+                    fs::read(&inner_zip).expect("read inner zip"),
+                ),
+                ("wrapper/project.GKO", b"outline".to_vec()),
+            ],
+        );
+
+        let mut extractor = ArchiveExtractor::new();
+        let working = extractor
+            .extract_if_needed(&outer_zip, false)
+            .expect("extract outer zip");
+
+        assert!(working.join("project.GTL").exists());
+        assert!(working.join("project.GKO").exists());
+        assert!(working.join("FlyingProbeTesting.json").exists());
+    }
+
+    fn write_test_zip(path: &Path, entries: Vec<(&str, Vec<u8>)>) {
+        let file = fs::File::create(path).expect("create test zip");
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+
+        for (name, bytes) in entries {
+            zip.start_file(name, options).expect("start zip entry");
+            zip.write_all(&bytes).expect("write zip entry");
+        }
+
+        zip.finish().expect("finish test zip");
     }
 }
