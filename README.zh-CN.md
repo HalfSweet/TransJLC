@@ -83,6 +83,10 @@ TransJLC -p="D:\Projects\MyPCB\Gerber" -o="D:\Projects\MyPCB\Output" -z=true -n=
 
 欢迎各种贡献、问题和功能请求！请随时查看 [issues 页面](https://github.com/HalfSweet/TransJLC/issues)。
 
+## 🙏 致谢
+
+感谢 [@DFC1234](https://github.com/DFC1234) 在 [issue #11](https://github.com/HalfSweet/TransJLC/issues/11) 中提供的新思路。
+
 ## 📄 许可证
 
 该项目采用 Apache-2.0 许可证。详情请参阅 [LICENSE](LICENSE) 文件。
