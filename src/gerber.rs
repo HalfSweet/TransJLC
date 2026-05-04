@@ -18,6 +18,9 @@ pub struct GerberProcessor {
     /// Whether this is an imported PCB document
     is_imported_pcb_doc: bool,
 
+    /// Whether to inject a synthetic EasyEDA Pro header
+    inject_header: bool,
+
     /// Maximum file size for hash processing (bytes)
     max_hash_file_size: usize,
 }
@@ -27,6 +30,7 @@ impl Default for GerberProcessor {
         Self {
             ignore_hash: false,
             is_imported_pcb_doc: false,
+            inject_header: true,
             max_hash_file_size: 30_000_000, // 30MB
         }
     }
@@ -50,6 +54,12 @@ impl GerberProcessor {
         self
     }
 
+    /// Configure whether to inject a synthetic EasyEDA Pro header
+    pub fn with_inject_header(mut self, inject: bool) -> Self {
+        self.inject_header = inject;
+        self
+    }
+
     /// Configure maximum file size for hash processing
     pub fn with_max_hash_file_size(mut self, size: usize) -> Self {
         self.max_hash_file_size = size;
@@ -64,10 +74,12 @@ impl GerberProcessor {
     ) -> Result<String> {
         info!("Processing Gerber files...");
 
-        let mut processed_content = content;
+        let mut processed_content = self.normalize_gerber_content(content)?;
 
         // Add header information
-        processed_content = self.add_gerber_header(processed_content);
+        if self.inject_header {
+            processed_content = self.add_gerber_header(processed_content);
+        }
 
         // Apply aperture prefix normalization when required
         if needs_g54_aperture_prefix {
@@ -80,6 +92,60 @@ impl GerberProcessor {
 
         info!("Gerber file processing completed");
         Ok(processed_content)
+    }
+
+    /// Apply Gerber normalizations that are safe no-ops on standard exports
+    fn normalize_gerber_content(&self, content: String) -> Result<String> {
+        let mut result = content;
+        result = self.split_combined_fs_mo(result)?;
+        result = self.strip_deprecated_attribute_blocks(result)?;
+        result = self.normalize_aperture_decimals(result)?;
+        Ok(result)
+    }
+
+    /// Normalize Excellon drill tool diameters that omit the leading zero
+    pub fn normalize_excellon_drill_content(&self, content: String) -> Result<String> {
+        let tool_regex =
+            Regex::new(r"(?m)^(T\d+C)\.(\d)").context("Failed to compile Excellon tool regex")?;
+        Ok(tool_regex.replace_all(&content, "${1}0.${2}").to_string())
+    }
+
+    /// Split combined Gerber extended commands such as %FS...*MO...*%
+    fn split_combined_fs_mo(&self, content: String) -> Result<String> {
+        let fs_mo_regex = Regex::new(r"%\s*(FS[^*%]*)\*\s*(MO[^*%]*)\*\s*%")
+            .context("Failed to compile combined FS/MO regex")?;
+        let mo_fs_regex = Regex::new(r"%\s*(MO[^*%]*)\*\s*(FS[^*%]*)\*\s*%")
+            .context("Failed to compile combined MO/FS regex")?;
+
+        let result = fs_mo_regex
+            .replace_all(&content, "%${1}*%\n%${2}*%")
+            .to_string();
+        Ok(mo_fs_regex
+            .replace_all(&result, "%${1}*%\n%${2}*%")
+            .to_string())
+    }
+
+    /// Remove deprecated default extended attribute blocks rejected by stricter parsers
+    fn strip_deprecated_attribute_blocks(&self, content: String) -> Result<String> {
+        let deprecated_regex = Regex::new(r"%(?:IR|IP|OF|MI|SF)[^%]*%\n?")
+            .context("Failed to compile deprecated attribute regex")?;
+        Ok(deprecated_regex.replace_all(&content, "").to_string())
+    }
+
+    /// Add leading zeros to decimal values inside aperture definitions only
+    fn normalize_aperture_decimals(&self, content: String) -> Result<String> {
+        let aperture_line_regex = Regex::new(r"(?m)^%ADD\d+[A-Z][^*]*\*%$")
+            .context("Failed to compile aperture line regex")?;
+        let leading_dot_regex =
+            Regex::new(r"([,X])\.(\d)").context("Failed to compile leading dot regex")?;
+
+        Ok(aperture_line_regex
+            .replace_all(&content, |caps: &regex::Captures| {
+                leading_dot_regex
+                    .replace_all(&caps[0], "${1}0.${2}")
+                    .to_string()
+            })
+            .to_string())
     }
 
     /// Add standard header to Gerber file
@@ -160,248 +226,156 @@ impl GerberProcessor {
 
         info!("Adding hash aperture to Gerber file");
 
-        let aperture_info = self.analyze_apertures(&content)?;
-        let hash_aperture = self.generate_hash_aperture(&content, &aperture_info)?;
-        let result = self.insert_hash_aperture(content, hash_aperture, &aperture_info)?;
+        let result = self.add_hash_aperture_fixed(content)?;
 
         debug!("Hash aperture added successfully");
         Ok(result)
     }
 
-    /// Analyze existing apertures in the Gerber file
-    fn analyze_apertures(&self, content: &str) -> Result<ApertureInfo> {
-        let lines: Vec<&str> = content.split('\n').collect();
-        let aperture_regex = Regex::new(r"^%ADD(\d{2,4})\D.*")
-            .context("Failed to compile aperture analysis regex")?;
-        let aperture_macro_regex =
-            Regex::new(r"^%AD|^%AM").context("Failed to compile aperture macro regex")?;
-
-        let mut aperture_definitions = Vec::new();
-        let mut aperture_numbers = Vec::new();
-        let mut found_aperture = false;
-        let number_max = 9999u32;
-
-        // Scan for aperture definitions (limit to first 200 lines or until non-aperture content)
-        for (index, line) in lines.iter().enumerate() {
-            if index > 200
-                && (!aperture_macro_regex.is_match(line) || index > 200 + (number_max as usize) * 2)
-            {
-                break;
-            }
-
-            if let Some(caps) = aperture_regex.captures(line) {
-                if let Some(num_str) = caps.get(1) {
-                    if let Ok(num) = num_str.as_str().parse::<u32>() {
-                        aperture_definitions.push(line.to_string());
-                        aperture_numbers.push(num);
-                        found_aperture = true;
-                    }
-                }
-            } else if found_aperture {
-                break;
-            }
+    /// Append a JLC-validator-compatible hash aperture without renumbering existing apertures
+    fn add_hash_aperture_fixed(&self, content: String) -> Result<String> {
+        let aperture_regex = Regex::new(r"(?m)^%ADD(\d{2,4})(\D[^\n]*)$")
+            .context("Failed to compile aperture definition regex")?;
+        let matches: Vec<_> = aperture_regex.find_iter(&content).collect();
+        if matches.is_empty() {
+            debug!("No aperture definitions found; skipping hash aperture");
+            return Ok(content);
         }
 
-        Ok(ApertureInfo {
-            definitions: aperture_definitions,
-            numbers: aperture_numbers,
-            max_number: number_max,
-        })
-    }
+        let use_regex = Regex::new(r"(?m)(?:^[ \t]*|G54)D(\d{2,4})\*")
+            .context("Failed to compile aperture use regex")?;
+        let used_numbers = use_regex
+            .captures_iter(&content)
+            .filter_map(|caps| caps.get(1))
+            .filter_map(|m| m.as_str().parse::<u32>().ok())
+            .collect::<std::collections::HashSet<_>>();
 
-    /// Generate hash-based aperture definition
-    fn generate_hash_aperture(
-        &self,
-        content: &str,
-        aperture_info: &ApertureInfo,
-    ) -> Result<HashAperture> {
-        let mut rng = rand::thread_rng();
+        let mut delete_ranges = Vec::new();
+        for m in aperture_regex.captures_iter(&content) {
+            let Some(full_match) = m.get(0) else {
+                continue;
+            };
+            let Some(number_match) = m.get(1) else {
+                continue;
+            };
+            let Ok(number) = number_match.as_str().parse::<u32>() else {
+                continue;
+            };
+            if used_numbers.contains(&number) {
+                continue;
+            }
 
-        // Select insertion position
-        let selection_index = std::cmp::min(
-            5 + rng.gen_range(0..5),
-            if aperture_info.numbers.len() > 1 {
-                aperture_info.numbers.len() - 1
-            } else {
-                0
-            },
-        );
+            let mut end = full_match.end();
+            if content.as_bytes().get(end) == Some(&b'\n') {
+                end += 1;
+            }
+            delete_ranges.push((full_match.start(), end));
+        }
 
-        let selection_count = if aperture_info.numbers.len() <= 5 {
-            aperture_info.numbers.len()
-        } else {
-            selection_index
+        let mut cleaned = content;
+        for (start, end) in delete_ranges.into_iter().rev() {
+            cleaned.replace_range(start..end, "");
+        }
+
+        let aperture_layout = {
+            let matches_after: Vec<_> = aperture_regex.find_iter(&cleaned).collect();
+            matches_after.last().map(|last_match| {
+                let max_number = aperture_regex
+                    .captures_iter(&cleaned)
+                    .filter_map(|caps| caps.get(1))
+                    .filter_map(|m| m.as_str().parse::<u32>().ok())
+                    .max()
+                    .unwrap_or(9);
+                (max_number, last_match.end())
+            })
         };
 
-        let (selected_aperture, target_number) =
-            if selection_count > 0 && selection_index < aperture_info.definitions.len() {
-                (
-                    Some(aperture_info.definitions[selection_index].clone()),
-                    aperture_info.numbers[selection_index],
-                )
-            } else {
-                // Use default values if no suitable aperture found
-                let default_number = if aperture_info.numbers.is_empty() {
-                    10u32
-                } else if aperture_info.numbers.len() <= 5 {
-                    aperture_info.numbers.last().unwrap() + 1
+        let (target_number, insertion_point) =
+            if let Some((max_number, last_match_end)) = aperture_layout {
+                let mut insertion_point = last_match_end;
+                if cleaned.as_bytes().get(insertion_point) == Some(&b'\n') {
+                    insertion_point += 1;
                 } else {
-                    10u32
-                };
-                (None, default_number.min(aperture_info.max_number))
+                    cleaned.insert(insertion_point, '\n');
+                    insertion_point += 1;
+                }
+
+                (max_number + 1, insertion_point)
+            } else {
+                if !cleaned.ends_with('\n') {
+                    cleaned.push('\n');
+                }
+                (10, cleaned.len())
             };
 
-        // Calculate hash
-        let hash_content = if self.is_imported_pcb_doc {
-            format!("494d{}", content)
-        } else {
-            content.to_string()
-        };
-
         let mut hasher = Md5::new();
-        hasher.update(hash_content.as_bytes());
-        let hash_result = hasher.finalize();
-        let hash_hex = format!("{:x}", hash_result);
-
-        // Convert hash to aperture size
+        hasher.update(cleaned.as_bytes());
+        let hash_hex = format!("{:x}", hasher.finalize());
         let last_two_hex = &hash_hex[hash_hex.len() - 2..];
         let hash_number = u32::from_str_radix(last_two_hex, 16).unwrap_or(0) % 100;
-        let hash_suffix = format!("{:02}", hash_number);
 
-        let base_size = rng.gen_range(0.0..1.0);
-        let size_with_hash = format!("{:.2}{}", base_size, hash_suffix);
-        let final_size = if size_with_hash.parse::<f64>().unwrap_or(0.0) == 0.0 {
-            "0.0100".to_string()
-        } else {
-            size_with_hash
+        let mut rng = rand::thread_rng();
+        let random_prefix = rng.gen_range(0..=99);
+        let mut size = format!("0.{random_prefix:02}{hash_number:02}");
+        if size == "0.0000" {
+            size = "0.0100".to_string();
+        }
+
+        let hash_line = format!("%ADD{target_number}C,{size}*%\n");
+        Ok(format!(
+            "{}{}{}",
+            &cleaned[..insertion_point],
+            hash_line,
+            &cleaned[insertion_point..]
+        ))
+    }
+
+    /// Verify the final hash aperture using the same stripping rule as JLC's validator
+    pub fn verify_hash_aperture(&self, content: &str) -> Result<bool> {
+        let aperture_regex = Regex::new(r"(?m)^%ADD(\d{2,4})(\D[^\n]*)$")
+            .context("Failed to compile aperture verifier regex")?;
+        let Some(last_match) = aperture_regex.find_iter(content).last() else {
+            return Ok(true);
         };
 
-        // Create aperture definition
-        let aperture_definition = if let Some(ref selected) = selected_aperture {
-            let size_regex = Regex::new(r",([\d.]+)").context("Failed to compile size regex")?;
-            size_regex
-                .replace(selected, |_: &regex::Captures| format!(",{}", final_size))
-                .to_string()
-        } else {
-            format!("%ADD{}C,{}*%", target_number, final_size)
+        let line = last_match.as_str();
+        let circle_size_regex =
+            Regex::new(r"C,(\d+(?:\.\d+))\*%\r?$").context("Failed to compile hash size regex")?;
+        let Some(caps) = circle_size_regex.captures(line) else {
+            return Ok(true);
         };
-
-        Ok(HashAperture {
-            definition: aperture_definition,
-            target_number,
-            hash: hash_hex,
-        })
-    }
-
-    /// Insert hash aperture into Gerber content
-    fn insert_hash_aperture(
-        &self,
-        content: String,
-        hash_aperture: HashAperture,
-        aperture_info: &ApertureInfo,
-    ) -> Result<String> {
-        // First, renumber existing apertures to make room
-        let renumbered_content = self.renumber_apertures(
-            content,
-            hash_aperture.target_number,
-            aperture_info.max_number,
-        )?;
-
-        // Then insert the hash aperture
-        self.insert_aperture_definition(renumbered_content, hash_aperture)
-    }
-
-    /// Renumber existing apertures to make room for hash aperture
-    fn renumber_apertures(
-        &self,
-        content: String,
-        target_number: u32,
-        max_number: u32,
-    ) -> Result<String> {
-        let aperture_renumber_regex = Regex::new(r"(?m)^(%ADD|G54D)(\d{2,4})(.*)$")
-            .context("Failed to compile renumber regex")?;
-
-        let renumbered = aperture_renumber_regex
-            .replace_all(&content, |caps: &regex::Captures| {
-                let prefix = &caps[1];
-                let number: u32 = caps[2].parse().unwrap_or(0);
-                let suffix = &caps[3];
-
-                if number < target_number || number == max_number {
-                    caps[0].to_string()
-                } else {
-                    format!("{}{}{}", prefix, number + 1, suffix)
-                }
-            })
-            .to_string();
-
-        Ok(renumbered)
-    }
-
-    /// Insert the hash aperture definition at the appropriate location
-    fn insert_aperture_definition(
-        &self,
-        content: String,
-        hash_aperture: HashAperture,
-    ) -> Result<String> {
-        // Try to insert before the next aperture definition
-        let next_aperture_pattern = format!(r"(?m)^%ADD{}(\D)", hash_aperture.target_number + 1);
-        let next_aperture_regex =
-            Regex::new(&next_aperture_pattern).context("Failed to compile next aperture regex")?;
-
-        if next_aperture_regex.is_match(&content) {
-            let result = next_aperture_regex
-                .replace(&content, |caps: &regex::Captures| {
-                    format!(
-                        "{}\n%ADD{}{}",
-                        hash_aperture.definition,
-                        hash_aperture.target_number + 1,
-                        &caps[1]
-                    )
-                })
-                .to_string();
-            return Ok(result);
+        let Some(size_match) = caps.get(1) else {
+            return Ok(true);
+        };
+        let size = size_match.as_str();
+        let Some((_, decimals)) = size.split_once('.') else {
+            return Ok(true);
+        };
+        if decimals.len() != 4 {
+            return Ok(true);
         }
 
-        // Fallback: insert before %LP or G commands
-        let lines: Vec<&str> = content.split('\n').collect();
-        let mut result_lines = Vec::new();
-        let mut inserted = false;
-        let mut mo_found = false;
-
-        for line in lines {
-            if !mo_found && line.starts_with("%MO") {
-                mo_found = true;
-            } else if mo_found && !inserted && (line.starts_with("%LP") || line.starts_with("G")) {
-                result_lines.push(hash_aperture.definition.as_str());
-                inserted = true;
-            }
-            result_lines.push(line);
+        let expected_suffix = &decimals[decimals.len() - 2..];
+        let mut end = last_match.end();
+        if content.as_bytes().get(end) == Some(&b'\n') {
+            end += 1;
         }
 
-        if !inserted {
-            result_lines.push(hash_aperture.definition.as_str());
-        }
+        let mut stripped = String::with_capacity(content.len() - (end - last_match.start()));
+        stripped.push_str(&content[..last_match.start()]);
+        stripped.push_str(&content[end..]);
 
-        Ok(result_lines.join("\n"))
+        let mut hasher = Md5::new();
+        hasher.update(stripped.as_bytes());
+        let hash_hex = format!("{:x}", hasher.finalize());
+        let last_two_hex = &hash_hex[hash_hex.len() - 2..];
+        let actual_suffix = format!(
+            "{:02}",
+            u32::from_str_radix(last_two_hex, 16).unwrap_or(0) % 100
+        );
+
+        Ok(actual_suffix == expected_suffix)
     }
-}
-
-/// Information about existing apertures in a Gerber file
-#[derive(Debug)]
-struct ApertureInfo {
-    definitions: Vec<String>,
-    numbers: Vec<u32>,
-    max_number: u32,
-}
-
-/// Hash-based aperture information
-#[derive(Debug)]
-#[allow(dead_code)]
-struct HashAperture {
-    definition: String,
-    target_number: u32,
-    hash: String,
 }
 
 #[cfg(test)]
@@ -452,15 +426,29 @@ mod tests {
     }
 
     #[test]
-    fn test_aperture_analysis() {
+    fn test_hash_aperture_is_appended_and_verifies() {
         let processor = GerberProcessor::new();
-        let test_content = "%ADD10C,0.1*%\n%ADD11R,0.2X0.3*%\nG04 End of apertures*".to_string();
+        let test_content = "%FSLAX24Y24*%\n%MOMM*%\n%ADD10C,0.1*%\n%ADD11C,0.2*%\nG54D10*\nX0Y0D02*\nG54D11*\nX100Y100D01*\nM02*\n".to_string();
 
-        let aperture_info = processor.analyze_apertures(&test_content).unwrap();
+        let result = processor.add_hash_aperture_to_gerber(test_content).unwrap();
 
-        assert_eq!(aperture_info.numbers.len(), 2);
-        assert!(aperture_info.numbers.contains(&10));
-        assert!(aperture_info.numbers.contains(&11));
+        assert!(result.contains("%ADD10C,0.1*%"));
+        assert!(result.contains("%ADD11C,0.2*%"));
+        assert!(result.contains("G54D11*"));
+        assert!(result.contains("%ADD12C,0."));
+        assert!(processor.verify_hash_aperture(&result).unwrap());
+    }
+
+    #[test]
+    fn test_stale_unreferenced_hash_aperture_is_removed() {
+        let processor = GerberProcessor::new();
+        let test_content = "%ADD10C,0.1*%\n%ADD11C,0.1234*%\nG54D10*\nX0Y0D02*\nM02*\n".to_string();
+
+        let result = processor.add_hash_aperture_to_gerber(test_content).unwrap();
+
+        assert!(!result.contains("%ADD11C,0.1234*%"));
+        assert!(result.contains("%ADD11C,0."));
+        assert!(processor.verify_hash_aperture(&result).unwrap());
     }
 
     #[test]
@@ -508,5 +496,31 @@ mod tests {
 
         assert!(result.contains("X30584000Y-7866000D03*"));
         assert!(result.contains("G54D10*"));
+    }
+
+    #[test]
+    fn test_universal_gerber_normalization() {
+        let processor = GerberProcessor::new().with_ignore_hash(true);
+        let content = "%FSLAX24Y24* MISSING?%\n%FSLAX24Y24*%".to_string();
+        let normalized = processor.normalize_gerber_content(content).unwrap();
+        assert!(normalized.contains("%FSLAX24Y24*%"));
+
+        let content =
+            "%FSLAX24Y24*MOMM*%\n%IR0*IPPOS*OFA0B0*MIA0B0*SFA1B1*%\n%ADD10C,.15*%\n".to_string();
+        let normalized = processor.normalize_gerber_content(content).unwrap();
+        assert!(normalized.contains("%FSLAX24Y24*%\n%MOMM*%"));
+        assert!(!normalized.contains("%IR0"));
+        assert!(normalized.contains("%ADD10C,0.15*%"));
+    }
+
+    #[test]
+    fn test_excellon_tool_decimal_normalization() {
+        let processor = GerberProcessor::new();
+        let result = processor
+            .normalize_excellon_drill_content("T01C.01\nT02C0.02\n".to_string())
+            .unwrap();
+
+        assert!(result.contains("T01C0.01"));
+        assert!(result.contains("T02C0.02"));
     }
 }
