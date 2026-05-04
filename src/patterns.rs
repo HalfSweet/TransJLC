@@ -97,10 +97,7 @@ impl EdaPatterns {
 
     /// Add a pattern for a specific layer type
     pub fn add_pattern(&mut self, layer_type: LayerType, pattern: String) {
-        self.patterns
-            .entry(layer_type)
-            .or_insert_with(Vec::new)
-            .push(pattern);
+        self.patterns.entry(layer_type).or_default().push(pattern);
     }
 
     /// Match a filename against all patterns and return the layer type

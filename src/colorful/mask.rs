@@ -78,12 +78,9 @@ fn parse_round_rect_macro(args: Option<&[MacroDecimal]>) -> Option<(f64, f64)> {
     let mut ys = Vec::new();
     for pair in coords.chunks(2) {
         if pair.len() == 2 {
-            match (&pair[0], &pair[1]) {
-                (MacroDecimal::Value(x), MacroDecimal::Value(y)) => {
-                    xs.push(x);
-                    ys.push(y);
-                }
-                _ => {}
+            if let (MacroDecimal::Value(x), MacroDecimal::Value(y)) = (&pair[0], &pair[1]) {
+                xs.push(x);
+                ys.push(y);
             }
         }
     }

@@ -86,10 +86,8 @@ pub(crate) fn parse_outline_bounds(content: &str) -> Result<BoardBounds> {
                     max_y = max_y.max(y_val);
                 }
             }
-        } else if let Command::ExtendedCode(extended) = cmd {
-            if let ExtendedCode::Unit(u) = extended {
-                units = *u;
-            }
+        } else if let Command::ExtendedCode(ExtendedCode::Unit(u)) = cmd {
+            units = *u;
         }
     }
 

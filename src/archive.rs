@@ -19,6 +19,12 @@ pub struct ArchiveExtractor {
     temp_dir: Option<TempDir>,
 }
 
+impl Default for ArchiveExtractor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArchiveExtractor {
     /// Create a new archive extractor
     pub fn new() -> Self {
@@ -431,13 +437,17 @@ mod tests {
 
     #[test]
     fn test_archive_creator_options() {
-        let _options = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored)
-            .unix_permissions(0o755);
+        let temp_dir = tempdir().expect("create temp dir");
+        let source_path = temp_dir.path().join("source.txt");
+        let zip_path = temp_dir.path().join("output.zip");
 
-        // Test that options are created successfully
-        // The actual compression method can be verified in integration tests
-        assert!(true); // Placeholder for actual verification
+        fs::write(&source_path, "test").expect("write source file");
+        ArchiveCreator::create_zip([source_path.as_path()], zip_path.as_path(), false)
+            .expect("create zip");
+
+        let file = fs::File::open(zip_path).expect("open zip");
+        let archive = zip::ZipArchive::new(file).expect("read zip");
+        assert_eq!(archive.len(), 1);
     }
 
     #[test]
