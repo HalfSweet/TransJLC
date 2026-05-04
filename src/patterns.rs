@@ -106,43 +106,25 @@ impl EdaPatterns {
     /// Match a filename against all patterns and return the layer type
     /// Special handling for drill files to ensure NPTH takes precedence over PTH
     pub fn match_filename(&self, filename: &str) -> Option<LayerType> {
-        // Special handling for drill files: check NPTH first, then PTH
-        if filename.to_lowercase().ends_with(".drl") {
-            // Check NPTH patterns first
-            if let Some(npth_patterns) = self.patterns.get(&LayerType::NpthThrough) {
-                for pattern in npth_patterns {
-                    if let Ok(regex) = Regex::new(pattern) {
-                        if regex.is_match(filename) {
-                            debug!("Matched '{}' to NPTH using pattern '{}'", filename, pattern);
-                            return Some(LayerType::NpthThrough);
-                        }
-                    }
-                }
-            }
-
-            // Then check PTH patterns
-            if let Some(pth_patterns) = self.patterns.get(&LayerType::PthThrough) {
-                for pattern in pth_patterns {
-                    if let Ok(regex) = Regex::new(pattern) {
-                        if regex.is_match(filename) {
-                            debug!("Matched '{}' to PTH using pattern '{}'", filename, pattern);
-                            return Some(LayerType::PthThrough);
-                        }
-                    }
-                }
-            }
-
-            // Check PTH via patterns
-            if let Some(pth_via_patterns) = self.patterns.get(&LayerType::PthThroughVia) {
-                for pattern in pth_via_patterns {
-                    if let Ok(regex) = Regex::new(pattern) {
-                        if regex.is_match(filename) {
+        // Special handling for drill files: check NPTH, PTH, then PTH-via
+        // before other layer patterns. Some EDAs emit Excellon drills as .TXT.
+        for drill_layer in [
+            LayerType::NpthThrough,
+            LayerType::PthThrough,
+            LayerType::PthThroughVia,
+        ] {
+            if let Some(drill_patterns) = self.patterns.get(&drill_layer) {
+                for pattern in drill_patterns {
+                    match Regex::new(pattern) {
+                        Ok(regex) if regex.is_match(filename) => {
                             debug!(
-                                "Matched '{}' to PTH Via using pattern '{}'",
-                                filename, pattern
+                                "Matched '{}' to {:?} using pattern '{}'",
+                                filename, drill_layer, pattern
                             );
-                            return Some(LayerType::PthThroughVia);
+                            return Some(drill_layer);
                         }
+                        Ok(_) => {}
+                        Err(_) => warn!("Invalid regex pattern: {}", pattern),
                     }
                 }
             }
@@ -310,11 +292,6 @@ impl PatternMatcher {
         patterns.add_pattern(LayerType::PthThrough, r"(?i)\.txt$".to_string()); // Drill file as txt
         patterns.add_pattern(LayerType::NpthThrough, r"(?i)npth\.drl$".to_string());
         patterns.add_pattern(LayerType::NpthThrough, r"(?i)-npth\.drl$".to_string());
-
-        // Other common files
-        patterns.add_pattern(LayerType::Other, r"(?i)\.drr$".to_string()); // Drill report
-        patterns.add_pattern(LayerType::Other, r"(?i)\.rep$".to_string()); // Report files
-        patterns.add_pattern(LayerType::Other, r"(?i)\.rpt$".to_string());
 
         patterns
     }
@@ -490,6 +467,18 @@ mod tests {
             patterns.match_filename("project.gtl"),
             Some(LayerType::TopCopper)
         );
+
+        assert_eq!(
+            patterns.match_filename("project.GKO"),
+            Some(LayerType::BoardOutline)
+        );
+
+        assert_eq!(
+            patterns.match_filename("project.TXT"),
+            Some(LayerType::PthThrough)
+        );
+
+        assert_eq!(patterns.match_filename("project.DRR"), None);
     }
 
     #[test]
